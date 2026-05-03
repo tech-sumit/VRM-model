@@ -33,7 +33,7 @@ def normalize(raw: dict) -> Record | None:
 
 
 SPEC = NormalizeSpec(
-    hf_id="InfiMM/Geometry3K",
+    hf_id="hiyouga/geometry3k",
     split="train",
     normalize=normalize,
     default_verifier="normalize_choice",

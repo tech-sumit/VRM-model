@@ -28,7 +28,7 @@ def normalize(raw: dict) -> Record | None:
 
 
 SPEC = NormalizeSpec(
-    hf_id="TabMWP/TabMWP",
+    hf_id="Arietem/tabmwp",
     split="train",
     normalize=normalize,
 )

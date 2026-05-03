@@ -37,7 +37,7 @@ def normalize(raw: dict) -> Record | None:
 
 
 SPEC = NormalizeSpec(
-    hf_id="Osilly/Vision-R1-cold-distill",
+    hf_id="Osilly/Vision-R1-cold",
     split="train",
     normalize=normalize,
 )

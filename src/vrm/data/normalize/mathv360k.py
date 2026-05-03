@@ -29,7 +29,7 @@ def normalize(raw: dict) -> Record | None:
 
 
 SPEC = NormalizeSpec(
-    hf_id="Math-LLaVA/MathV360K",
+    hf_id="Zhiqiang007/MathV360K",
     split="train",
     normalize=normalize,
 )

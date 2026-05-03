@@ -1,8 +1,10 @@
 """MAVIS-Instruct normalizer.
 
+The full 834K MAVIS-Instruct corpus from Zhang et al. 2024 was never open-sourced;
+only MAVIS-Geometry and MAVIS-Function were released on HF. We use MAVIS-Geometry
+(the larger and more canonical math-reasoning subset) as the `mavis` source.
+
 Expected raw fields: id, image (path or PIL), question, answer, answer_type.
-HF dataset id is approximate -- verify against the actual dataset card before
-running data-build.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ def normalize(raw: dict) -> Record | None:
 
 
 SPEC = NormalizeSpec(
-    hf_id="PKU-Alignment/MAVIS-Instruct",
+    hf_id="CaraJ/MAVIS-Geometry",
     split="train",
     normalize=normalize,
     default_verifier="exact_numeric",
