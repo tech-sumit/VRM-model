@@ -29,10 +29,18 @@ def _img_qa_raw() -> dict:
     }
 
 
+_MAVIS_RAW = {
+    "image_text_lite": "/tmp/x.png",
+    "text_en": {"text_lite_question": "What is 2+2?"},
+    "choices": ["3", "4", "5"],
+    "answer_index": 1,
+}
+
+
 @pytest.mark.parametrize(
     ("normalize", "source", "extras"),
     [
-        (mavis_normalize, "mavis", {}),
+        (mavis_normalize, "mavis", _MAVIS_RAW),
         (mathv360k_normalize, "mathv360k", {}),
         (
             vision_r1_cold_normalize,
@@ -62,7 +70,6 @@ def test_basic_normalize_returns_record(normalize, source, extras):
 @pytest.mark.parametrize(
     "normalize",
     [
-        mavis_normalize,
         mathv360k_normalize,
         geo170k_normalize,
         mm_eureka_normalize,
@@ -78,7 +85,6 @@ def test_drops_when_image_missing(normalize):
 @pytest.mark.parametrize(
     "normalize",
     [
-        mavis_normalize,
         mathv360k_normalize,
         geo170k_normalize,
         mathvista_normalize,
@@ -88,3 +94,11 @@ def test_drops_when_image_missing(normalize):
 def test_drops_when_answer_missing(normalize):
     raw = _img_qa_raw() | {"answer": ""}
     assert normalize(raw) is None
+
+
+def test_mavis_drops_when_required_fields_missing():
+    """MAVIS uses image_text_lite + choices + answer_index, not image/answer."""
+    assert mavis_normalize({**_MAVIS_RAW, "image_text_lite": None}) is None
+    assert mavis_normalize({**_MAVIS_RAW, "choices": []}) is None
+    assert mavis_normalize({**_MAVIS_RAW, "answer_index": None}) is None
+    assert mavis_normalize({**_MAVIS_RAW, "answer_index": 99}) is None  # out of range

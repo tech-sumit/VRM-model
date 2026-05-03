@@ -36,7 +36,7 @@ def _normalize_one_source(source: str, cap: int, *, out_dir: Path) -> dict[str, 
     from datasets import load_dataset
 
     spec = REGISTRY[source]
-    ds = load_dataset(spec.hf_id, name=spec.config, split=spec.split, streaming=False)
+    ds = load_dataset(spec.hf_id, name=spec.config, split=spec.split, streaming=False, verification_mode="no_checks")
     n = min(cap, len(ds))
     ds = ds.select(range(n))
     return normalize_dataset(
