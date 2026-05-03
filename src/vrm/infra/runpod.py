@@ -208,12 +208,16 @@ def launch_train(
     sft_checkpoint: str | None,
     grpo_checkpoint: str | None,
 ) -> None:
+    gpu_type_train = os.environ.get("VRM_GPU_TYPE_TRAIN", "NVIDIA H200")
+    gpu_count_train = int(os.environ.get("VRM_GPU_COUNT_TRAIN", "8"))
     env = _common_env() | {
         "VRM_TASK": stage,
         "VRM_CONFIG": config,
         "DATA_VERSION": data_version,
         "RUN_NAME": run_name,
         "VRM_MAX_USD": os.environ.get(f"VRM_MAX_USD_{stage.upper()}", "5000"),
+        "VRM_GPU_TYPE": gpu_type_train,
+        "VRM_GPU_COUNT": str(gpu_count_train),
     }
     if sft_checkpoint:
         env["SFT_CHECKPOINT"] = sft_checkpoint
@@ -222,8 +226,8 @@ def launch_train(
     spec = _make_spec(
         name=f"vrm-{stage}-{run_name}",
         image=os.environ.get("VRM_TRAIN_IMAGE", "ghcr.io/tech-sumit/vrm-train:latest"),
-        gpu_type=os.environ.get("VRM_GPU_TYPE_TRAIN", "NVIDIA H200"),
-        gpu_count=int(os.environ.get("VRM_GPU_COUNT_TRAIN", "8")),
+        gpu_type=gpu_type_train,
+        gpu_count=gpu_count_train,
         env=env,
     )
     with RunPodClient() as c:
@@ -236,18 +240,22 @@ def launch_train(
 @click.option("--suite", default="full")
 def launch_eval(checkpoint: str, suite: str) -> None:
     run_name = f"eval-{suite}-{checkpoint.split('/')[-1]}"
+    gpu_type_eval = os.environ.get("VRM_GPU_TYPE_EVAL", "NVIDIA H200")
+    gpu_count_eval = int(os.environ.get("VRM_GPU_COUNT_EVAL", "1"))
     env = _common_env() | {
         "VRM_TASK": "eval",
         "CHECKPOINT": checkpoint,
         "SUITE": suite,
         "RUN_NAME": run_name,
         "VRM_MAX_USD": os.environ.get("VRM_MAX_USD_EVAL", "200"),
+        "VRM_GPU_TYPE": gpu_type_eval,
+        "VRM_GPU_COUNT": str(gpu_count_eval),
     }
     spec = _make_spec(
         name=f"vrm-eval-{run_name}",
         image=os.environ.get("VRM_EVAL_IMAGE", "ghcr.io/tech-sumit/vrm-eval:latest"),
-        gpu_type=os.environ.get("VRM_GPU_TYPE_EVAL", "NVIDIA H200"),
-        gpu_count=int(os.environ.get("VRM_GPU_COUNT_EVAL", "1")),
+        gpu_type=gpu_type_eval,
+        gpu_count=gpu_count_eval,
         env=env,
     )
     with RunPodClient() as c:
@@ -285,6 +293,12 @@ def launch_dataprep(
     default_image = (
         "ghcr.io/tech-sumit/vrm-train:latest" if needs_gpu else "ghcr.io/tech-sumit/vrm-dataprep:latest"
     )
+    if needs_gpu:
+        gpu_type: str | None = os.environ.get("VRM_GPU_TYPE_FILTER", "NVIDIA H200")
+        gpu_count = int(os.environ.get("VRM_GPU_COUNT_FILTER", "1"))
+    else:
+        gpu_type = None
+        gpu_count = 0
     env = _common_env() | {
         # VRM_TASK maps to the pod-entrypoint switch; "dataprep" runs
         # python -m vrm.data.build --stage $VRM_STAGE so all three stages
@@ -296,12 +310,17 @@ def launch_dataprep(
         "RUN_NAME": f"dataprep-{stage}-{data_version}",
         "VRM_MAX_USD": os.environ.get("VRM_MAX_USD_DATAPREP", "500"),
         "VRM_INCLUDE_DISTILLATION": "true" if include_distillation else "false",
+        # Budget daemon reads these to compute real burn rate. Without them
+        # it falls back to VRM_GPU_*_TRAIN (8xH200) and mis-reports by ~500x,
+        # which would prematurely kill CPU pods at ~15h wall-time.
+        "VRM_GPU_TYPE": gpu_type or "CPU",
+        "VRM_GPU_COUNT": str(gpu_count),
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",
         image=os.environ.get(image_env, default_image),
-        gpu_type=os.environ.get("VRM_GPU_TYPE_FILTER", "NVIDIA H200") if needs_gpu else None,
-        gpu_count=int(os.environ.get("VRM_GPU_COUNT_FILTER", "1")) if needs_gpu else 0,
+        gpu_type=gpu_type,
+        gpu_count=gpu_count,
         env=env,
         # CPU pods on RunPod cap container disk at 20-30 GB; GPU pods get more.
         container_disk_in_gb=200 if needs_gpu else 20,

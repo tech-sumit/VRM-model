@@ -24,11 +24,16 @@ GPU_HOUR_COST_USD: dict[str, float] = {
     "NVIDIA H100 80GB SXM": 2.99,
     "NVIDIA H200": 3.99,
     "NVIDIA B200": 5.99,
-    "CPU": 0.04,
+    "CPU": 0.06,
 }
+
+# CPU pod flat rate (RunPod cpu3c). Applied when gpu_count == 0.
+CPU_POD_HOUR_USD = 0.06
 
 
 def gpu_hour_cost(gpu_type: str, count: int) -> float:
+    if count <= 0:
+        return CPU_POD_HOUR_USD
     rate = GPU_HOUR_COST_USD.get(gpu_type)
     if rate is None:
         return 5.0 * count
@@ -36,7 +41,7 @@ def gpu_hour_cost(gpu_type: str, count: int) -> float:
 
 
 def hourly_burn_rate(gpu_type: str, gpu_count: int, volume_gb: int) -> float:
-    """USD/hr for compute + storage."""
+    """USD/hr for compute + storage. CPU pods use CPU_POD_HOUR_USD flat rate."""
     storage_per_hour = (volume_gb * 0.07) / (24 * 30)
     return gpu_hour_cost(gpu_type, gpu_count) + storage_per_hour
 
@@ -72,9 +77,13 @@ def main() -> None:
 
     pod_id = os.environ.get("RUNPOD_POD_ID")
     run_name = os.environ.get("RUN_NAME", "?")
-    gpu_type = os.environ.get("VRM_GPU_TYPE_TRAIN", "NVIDIA H200")
-    gpu_count = int(os.environ.get("VRM_GPU_COUNT_TRAIN", "8"))
-    volume_gb = int(os.environ.get("VRM_VOLUME_GB", "2000"))
+    # VRM_GPU_TYPE + VRM_GPU_COUNT are stage-specific env vars set by the
+    # runpod launcher. If absent (e.g. CPU-only dataprep pod), fall back
+    # to the CPU flat rate via gpu_count=0 rather than the 8xH200 default
+    # that would mis-report dataprep spend by ~500x.
+    gpu_type = os.environ.get("VRM_GPU_TYPE", "CPU")
+    gpu_count = int(os.environ.get("VRM_GPU_COUNT", "0"))
+    volume_gb = int(os.environ.get("VRM_VOLUME_GB", "0"))
 
     burn = hourly_burn_rate(gpu_type, gpu_count, volume_gb)
     print(
