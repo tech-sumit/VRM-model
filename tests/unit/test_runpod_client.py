@@ -34,9 +34,34 @@ def test_create_pod_posts_correct_payload(client):
     assert pod_id == "pod-abc123"
     assert route.called
     body = json.loads(route.calls[0].request.content)
-    assert body["gpuTypeId"] == "NVIDIA H200"
+    assert body["gpuTypeIds"] == ["NVIDIA H200"]
     assert body["gpuCount"] == 8
-    assert {"key": "VRM_TASK", "value": "sft"} in body["env"]
+    assert body["computeType"] == "GPU"
+    assert body["env"] == {"VRM_TASK": "sft", "RUN_NAME": "test"}
+    assert body["ports"] == ["22/tcp", "8000/http"]
+    assert body["dataCenterIds"] == ["US-GA-2"]
+
+
+@respx.mock
+def test_create_cpu_pod_payload(client):
+    route = respx.post("https://rest.runpod.io/v1/pods").mock(
+        return_value=httpx.Response(200, json={"id": "pod-cpu"})
+    )
+    spec = PodSpec(
+        name="vrm-dataprep",
+        image="ghcr.io/tech-sumit/vrm-dataprep:latest",
+        gpu_type_id=None,
+        gpu_count=0,
+        env={"VRM_TASK": "dataprep"},
+        region="US-GA-2",
+    )
+    pod_id = client.create_pod(spec)
+    assert pod_id == "pod-cpu"
+    body = json.loads(route.calls[0].request.content)
+    assert body["computeType"] == "CPU"
+    assert "gpuTypeIds" not in body
+    assert "gpuCount" not in body
+    assert body["vcpuCount"] == 2
 
 
 @respx.mock

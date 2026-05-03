@@ -19,11 +19,17 @@ DEFAULT_BASE_URL = "https://rest.runpod.io/v1"
 
 @dataclass(frozen=True)
 class PodSpec:
-    """Minimal spec for a RunPod pod we care about."""
+    """Minimal spec for a RunPod pod we care about.
+
+    Matches the POST /v1/pods REST schema (verified 2026-05-03): env is an
+    object, ports is an array, and GPU vs CPU pods take disjoint fields.
+    For CPU pods pass ``gpu_type_id=None`` + ``gpu_count=0`` + ``vcpu_count>0``;
+    otherwise both gpu_type_id and gpu_count>=1 are required.
+    """
 
     name: str
     image: str
-    gpu_type_id: str
+    gpu_type_id: str | None
     gpu_count: int
     volume_id: str | None = None
     volume_mount_path: str = "/workspace/data"
@@ -31,24 +37,31 @@ class PodSpec:
     env: dict[str, str] = field(default_factory=dict)
     region: str | None = None
     cloud_type: str = "SECURE"
-    ports: str = "22/tcp,8000/http"
+    ports: tuple[str, ...] = ("22/tcp", "8000/http")
+    vcpu_count: int = 2
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": self.name,
             "imageName": self.image,
-            "gpuTypeId": self.gpu_type_id,
-            "gpuCount": self.gpu_count,
             "volumeInGb": 0,
             "containerDiskInGb": self.container_disk_in_gb,
-            "networkVolumeId": self.volume_id,
-            "volumeMountPath": self.volume_mount_path,
-            "env": [{"key": k, "value": v} for k, v in self.env.items()],
-            "ports": self.ports,
+            "env": dict(self.env),
+            "ports": list(self.ports),
             "cloudType": self.cloud_type,
         }
+        if self.volume_id:
+            payload["networkVolumeId"] = self.volume_id
+            payload["volumeMountPath"] = self.volume_mount_path
+        if self.gpu_type_id and self.gpu_count >= 1:
+            payload["gpuTypeIds"] = [self.gpu_type_id]
+            payload["gpuCount"] = self.gpu_count
+            payload["computeType"] = "GPU"
+        else:
+            payload["computeType"] = "CPU"
+            payload["vcpuCount"] = self.vcpu_count
         if self.region:
-            payload["region"] = self.region
+            payload["dataCenterIds"] = [self.region]
         return payload
 
 
@@ -150,7 +163,13 @@ def _common_env() -> dict[str, str]:
     return {k: os.environ[k] for k in keys if os.environ.get(k)}
 
 
-def _make_spec(name: str, image: str, gpu_type: str, gpu_count: int, env: dict[str, str]) -> PodSpec:
+def _make_spec(
+    name: str,
+    image: str,
+    gpu_type: str | None,
+    gpu_count: int,
+    env: dict[str, str],
+) -> PodSpec:
     return PodSpec(
         name=name,
         image=image,
@@ -244,7 +263,7 @@ def launch_dataprep(recipes: tuple[str, ...], data_version: str, include_distill
     spec = _make_spec(
         name=f"vrm-dataprep-{data_version}",
         image=os.environ.get("VRM_DATAPREP_IMAGE", "ghcr.io/tech-sumit/vrm-dataprep:latest"),
-        gpu_type="CPU",
+        gpu_type=None,
         gpu_count=0,
         env=env,
     )
