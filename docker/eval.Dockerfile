@@ -8,7 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TRANSFORMERS_CACHE=/workspace/cache/hf
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3-pip \
+        python3.11 python3.11-venv python3.11-dev python3-pip \
+        build-essential \
         git curl ca-certificates openssh-client tini jq \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
