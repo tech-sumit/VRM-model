@@ -1,0 +1,68 @@
+name: vrm-r2-progress
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_version:
+        description: "data version"
+        required: false
+        default: "v1"
+        type: string
+      stage:
+        description: "stage: normalized | filtered | distilled"
+        required: false
+        default: "normalized"
+        type: string
+
+jobs:
+  progress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Count shards per source
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          uv run python -c "
+          from collections import defaultdict
+          from vrm.infra.r2 import R2Client, R2Config
+          r2 = R2Client(R2Config.from_env())
+          dv = '${{ inputs.data_version }}'
+          stage = '${{ inputs.stage }}'
+          prefix = f'vrm/{dv}/{stage}/'
+          keys = list(r2.list_prefix(prefix))
+          per_src = defaultdict(lambda: {'parquet': 0, 'tar': 0, 'state': 0, 'bytes': 0})
+          total_bytes = 0
+          for k in keys:
+              size = k.get('Size', 0)
+              total_bytes += size
+              key = k['Key']
+              rel = key[len(prefix):]
+              src = rel.split('/', 1)[0] if '/' in rel else rel
+              if key.endswith('.parquet'): per_src[src]['parquet'] += 1
+              elif key.endswith('-images.tar'): per_src[src]['tar'] += 1
+              elif key.endswith('_state.json'): per_src[src]['state'] += 1
+              per_src[src]['bytes'] += size
+          print(f'Prefix: {prefix}')
+          print(f'Total objects: {len(keys)}  Total size: {total_bytes/1e9:.2f} GB')
+          print()
+          print(f'{\"source\":30s} {\"parquet\":>8s} {\"tar\":>5s} {\"state\":>5s} {\"size_mb\":>10s}')
+          for src in sorted(per_src):
+              s = per_src[src]
+              print(f'{src:30s} {s[\"parquet\"]:>8d} {s[\"tar\"]:>5d} {s[\"state\"]:>5d} {s[\"bytes\"]/1e6:>10.1f}')
+          " | tee /tmp/progress.txt
+          {
+            echo '## R2 progress: ${{ inputs.data_version }} / ${{ inputs.stage }}'
+            echo '```'
+            cat /tmp/progress.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
