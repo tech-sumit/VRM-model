@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -174,6 +175,9 @@ def download_stage_to_local(
     n_parquet = 0
     n_images = 0
     n_state = 0
+    n_tars = 0
+    image_tars: list[tuple[str, Path]] = []
+
     for key in keys:
         rel = key[len(prefix) :]
         parts = rel.split("/")
@@ -182,23 +186,51 @@ def download_stage_to_local(
         source = parts[0]
         if sources is not None and source not in sources:
             continue
-        local_path = local_root / rel
-        if not include_images and "/images/" in key:
+
+        is_image_tar = key.endswith("-images.tar")
+        is_loose_image = "/images/" in key
+        if not include_images and (is_image_tar or is_loose_image):
             continue
+
+        local_path = local_root / rel
         if local_path.exists():
-            # Already fetched -- skip re-download for incremental resume.
             if key.endswith(".parquet"):
                 n_parquet += 1
-            elif "/images/" in key:
+            elif is_loose_image:
                 n_images += 1
+            elif is_image_tar:
+                n_tars += 1
+                image_tars.append((source, local_path))
             elif key.endswith("_state.json"):
                 n_state += 1
             continue
         if r2.download_to(key, local_path):
             if key.endswith(".parquet"):
                 n_parquet += 1
-            elif "/images/" in key:
+            elif is_loose_image:
                 n_images += 1
+            elif is_image_tar:
+                n_tars += 1
+                image_tars.append((source, local_path))
             elif key.endswith("_state.json"):
                 n_state += 1
-    return {"parquet_shards": n_parquet, "images": n_images, "state_files": n_state}
+
+    # Extract each image tar into the source's images/ subdir so downstream
+    # code sees loose JPEGs just like the old layout (records reference
+    # "images/<fname>.jpg" paths).
+    for source, tar_path in image_tars:
+        images_dir = local_root / source / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with tarfile.open(tar_path, "r") as tar:
+                tar.extractall(images_dir)
+            n_images += len(list(images_dir.glob("*")))
+        except Exception:  # pragma: no cover - corrupt tar; downstream skips records
+            continue
+
+    return {
+        "parquet_shards": n_parquet,
+        "images_loose": n_images,
+        "image_tars": n_tars,
+        "state_files": n_state,
+    }
