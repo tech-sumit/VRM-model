@@ -11,6 +11,20 @@ trap 'log "FATAL: line $LINENO failed"; python -m vrm.infra.webhook failure "${V
 : "${VRM_TASK:?VRM_TASK env var is required (sft|grpo|rejection|eval|dataprep)}"
 : "${RUN_NAME:?RUN_NAME env var is required}"
 
+# Start sshd in the background for hotfix/debug access if RunPod injected a
+# PUBLIC_KEY. Only starts when ssh is installed (all vrm-* images ship
+# openssh-server). Non-fatal if keygen or sshd is missing.
+if [[ -n "${PUBLIC_KEY:-}" ]] && command -v sshd >/dev/null 2>&1; then
+    log "Starting sshd for hotfix access"
+    mkdir -p /root/.ssh /run/sshd
+    printf '%s\n' "$PUBLIC_KEY" > /root/.ssh/authorized_keys
+    chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+    # Generate host keys if missing (fresh container).
+    [[ ! -f /etc/ssh/ssh_host_ed25519_key ]] && ssh-keygen -A >/dev/null 2>&1 || true
+    /usr/sbin/sshd -D -e &
+    log "sshd listening on :22"
+fi
+
 # Pull latest source on every cold start so we always run committed code.
 if [[ -n "${VRM_GIT_REPO:-}" ]] && [[ -n "${VRM_GIT_REF:-}" ]]; then
     log "Pulling vrm source from $VRM_GIT_REPO@$VRM_GIT_REF"
