@@ -34,6 +34,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import click
 import httpx
@@ -330,7 +331,7 @@ async def distill_shards(
     refine_model: str | None = None,
     refine_fraction: float = 0.10,
     cap_usd: float | None = None,
-) -> dict[str, int | float | str]:
+) -> dict[str, Any]:
     """Distill all filtered shards using tiered OpenRouter ensemble.
 
     Saves output parquet shards every 500 records. Updates R2 state after

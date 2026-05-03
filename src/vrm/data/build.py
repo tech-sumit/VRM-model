@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -40,11 +41,11 @@ def _normalize_one_source(
     out_dir: Path,
     r2: R2Client | None,
     data_version: str,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     from datasets import load_dataset
 
     spec = REGISTRY[source]
-    load_kwargs: dict[str, object] = {
+    load_kwargs: dict[str, Any] = {
         "name": spec.config,
         "split": spec.split,
         "streaming": False,
@@ -82,7 +83,7 @@ def _normalize_one_source(
             }
 
     ds = ds.select(range(start_row, n))
-    result = normalize_dataset(
+    raw_result = normalize_dataset(
         (dict(r) for r in ds),
         source=source,
         out_dir=out_dir,
@@ -94,6 +95,7 @@ def _normalize_one_source(
         start_row_offset=start_row,
         total_rows_hint=n,
     )
+    result: dict[str, Any] = dict(raw_result)
     if start_row:
         result["resumed"] = f"from_row={start_row}"
     return result
