@@ -1,0 +1,40 @@
+name: vrm-pod-status
+
+on:
+  workflow_dispatch:
+    inputs:
+      pod_id:
+        description: "RunPod pod id to inspect"
+        required: true
+        type: string
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Status
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          uv run python -c "
+          import json, os
+          from vrm.infra.runpod import RunPodClient
+          with RunPodClient() as c:
+              p = c.get_pod('${{ inputs.pod_id }}')
+          print(json.dumps(p, indent=2))
+          " | tee /tmp/pod.json
+          {
+            echo '## Pod status for \`${{ inputs.pod_id }}\`'
+            echo '```json'
+            cat /tmp/pod.json
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
