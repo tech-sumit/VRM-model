@@ -170,15 +170,16 @@ def _make_spec(
     gpu_count: int,
     env: dict[str, str],
     container_disk_in_gb: int = 200,
+    attach_volume: bool = True,
 ) -> PodSpec:
     return PodSpec(
         name=name,
         image=image,
         gpu_type_id=gpu_type,
         gpu_count=gpu_count,
-        volume_id=os.environ.get("VRM_NETWORK_VOLUME_ID"),
+        volume_id=os.environ.get("VRM_NETWORK_VOLUME_ID") if attach_volume else None,
         env=env,
-        region=os.environ.get("VRM_REGION"),
+        region=os.environ.get("VRM_REGION") if attach_volume else None,
         container_disk_in_gb=container_disk_in_gb,
     )
 
@@ -269,9 +270,11 @@ def launch_dataprep(recipes: tuple[str, ...], data_version: str, include_distill
         gpu_count=0,
         env=env,
         # RunPod CPU pods cap container disk at 20-30 GB depending on flavor.
-        # Raw shards land on the network volume, so the container disk only
-        # needs to hold the image + working intermediates.
         container_disk_in_gb=20,
+        # Dataprep uploads directly to HF Hub -- no need for RunPod's network
+        # volume. Detaching lets RunPod schedule in any DC with CPU capacity,
+        # not just the one the VRM volume lives in.
+        attach_volume=False,
     )
     with RunPodClient() as c:
         pod_id = c.create_pod(spec)
