@@ -1,0 +1,25 @@
+name: vrm-pod-destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      pod_id:
+        description: "RunPod pod id to destroy"
+        required: true
+        type: string
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Destroy
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: uv run vrm runpod destroy '${{ inputs.pod_id }}'
