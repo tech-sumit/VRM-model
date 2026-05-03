@@ -77,3 +77,4 @@ jobs:
             echo "- monitor: https://www.runpod.io/console/pods/${{ steps.launch.outputs.pod_id }}"
             echo "- W&B: https://wandb.ai/${{ vars.WANDB_ENTITY }}/${{ vars.WANDB_PROJECT }}/runs/${{ inputs.run_name }}"
           } >> $GITHUB_STEP_SUMMARY
+
