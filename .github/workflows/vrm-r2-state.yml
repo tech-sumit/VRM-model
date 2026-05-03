@@ -1,0 +1,44 @@
+name: vrm-r2-state
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_version:
+        default: "v1"
+        type: string
+      stage:
+        default: "normalized"
+        type: string
+
+jobs:
+  state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Dump state
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          uv run python -c "
+          import json
+          from vrm.infra.r2 import R2Client, R2Config
+          r2 = R2Client(R2Config.from_env())
+          prefix = f'vrm/${{ inputs.data_version }}/${{ inputs.stage }}/'
+          keys = [k for k in r2.list_prefix(prefix) if k.endswith('_state.json')]
+          for k in sorted(keys):
+              try:
+                  b = r2.get_bytes(k)
+                  st = json.loads(b)
+                  print(f'{k}: {json.dumps(st)}')
+              except Exception as e:
+                  print(f'{k}: ERR {e}')
+          "
