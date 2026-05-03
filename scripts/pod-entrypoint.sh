@@ -46,7 +46,14 @@ if [[ -n "${VRM_GIT_REPO:-}" ]] && [[ -n "${VRM_GIT_REF:-}" ]]; then
     git clone "$VRM_GIT_REPO" vrm-src
     cd vrm-src
     git checkout "$VRM_GIT_REF"
-    pip install --no-deps -e .
+    # Use uv pip (bound to python3.11 on both train + dataprep images) instead of
+    # distro `pip` which on Ubuntu 22.04 is bound to python3.10 and rejects our
+    # requires-python >=3.11 constraint.
+    if command -v uv >/dev/null 2>&1; then
+        uv pip install --system --no-deps -e . || log "WARN: uv pip install failed, continuing with baked-in code"
+    else
+        python -m pip install --no-deps -e . || log "WARN: pip install failed, continuing with baked-in code"
+    fi
 fi
 
 # Budget tripwire daemon (background)
