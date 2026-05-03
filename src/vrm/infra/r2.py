@@ -147,3 +147,58 @@ def get_client() -> R2Client | None:
     """Factory: return an R2Client if credentials are in env, else None."""
     cfg = R2Config.from_env()
     return R2Client(cfg) if cfg else None
+
+
+def download_stage_to_local(
+    r2: R2Client,
+    *,
+    data_version: str,
+    stage: str,
+    local_root: Path,
+    sources: list[str] | None = None,
+    include_images: bool = True,
+) -> dict[str, int]:
+    """Mirror an entire stage's R2 prefix to local disk.
+
+    Used by downstream stages (filter, distill) to pull the prior stage's
+    output before running. Returns counts so caller can sanity-check.
+
+    Layout on disk mirrors R2 (per-source subdirs):
+        local_root/<source>/shard-*.parquet
+        local_root/<source>/images/*.jpg
+        local_root/<source>/_state.json
+    """
+    local_root.mkdir(parents=True, exist_ok=True)
+    prefix = f"vrm/{data_version}/{stage}/"
+    keys = r2.list_prefix(prefix)
+    n_parquet = 0
+    n_images = 0
+    n_state = 0
+    for key in keys:
+        rel = key[len(prefix) :]
+        parts = rel.split("/")
+        if not parts or not parts[0]:
+            continue
+        source = parts[0]
+        if sources is not None and source not in sources:
+            continue
+        local_path = local_root / rel
+        if not include_images and "/images/" in key:
+            continue
+        if local_path.exists():
+            # Already fetched -- skip re-download for incremental resume.
+            if key.endswith(".parquet"):
+                n_parquet += 1
+            elif "/images/" in key:
+                n_images += 1
+            elif key.endswith("_state.json"):
+                n_state += 1
+            continue
+        if r2.download_to(key, local_path):
+            if key.endswith(".parquet"):
+                n_parquet += 1
+            elif "/images/" in key:
+                n_images += 1
+            elif key.endswith("_state.json"):
+                n_state += 1
+    return {"parquet_shards": n_parquet, "images": n_images, "state_files": n_state}

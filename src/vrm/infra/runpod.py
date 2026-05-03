@@ -259,31 +259,54 @@ def launch_eval(checkpoint: str, suite: str) -> None:
 @click.option("--recipe", "recipes", multiple=True, required=True)
 @click.option("--data-version", required=True)
 @click.option(
+    "--stage",
+    type=click.Choice(["normalize", "filter", "distill", "all"], case_sensitive=False),
+    default="normalize",
+    show_default=True,
+    help=(
+        "Which pipeline stage to run. 'normalize' + 'distill' run on CPU pods; "
+        "'filter' runs on a GPU pod (1x H200) because it needs vLLM for pass@K."
+    ),
+)
+@click.option(
     "--include-distillation/--no-distillation",
     default=True,
     show_default=True,
 )
-def launch_dataprep(recipes: tuple[str, ...], data_version: str, include_distillation: bool) -> None:
+def launch_dataprep(
+    recipes: tuple[str, ...],
+    data_version: str,
+    stage: str,
+    include_distillation: bool,
+) -> None:
+    """Launch a data-pipeline pod. Picks CPU or GPU based on --stage."""
+    needs_gpu = stage == "filter"
+    image_env = "VRM_TRAIN_IMAGE" if needs_gpu else "VRM_DATAPREP_IMAGE"
+    default_image = (
+        "ghcr.io/tech-sumit/vrm-train:latest" if needs_gpu else "ghcr.io/tech-sumit/vrm-dataprep:latest"
+    )
     env = _common_env() | {
+        # VRM_TASK maps to the pod-entrypoint switch; "dataprep" runs
+        # python -m vrm.data.build --stage $VRM_STAGE so all three stages
+        # share one entrypoint path.
         "VRM_TASK": "dataprep",
+        "VRM_STAGE": stage,
         "VRM_CONFIG": ",".join(recipes),
         "DATA_VERSION": data_version,
-        "RUN_NAME": f"dataprep-{data_version}",
+        "RUN_NAME": f"dataprep-{stage}-{data_version}",
         "VRM_MAX_USD": os.environ.get("VRM_MAX_USD_DATAPREP", "500"),
         "VRM_INCLUDE_DISTILLATION": "true" if include_distillation else "false",
     }
     spec = _make_spec(
-        name=f"vrm-dataprep-{data_version}",
-        image=os.environ.get("VRM_DATAPREP_IMAGE", "ghcr.io/tech-sumit/vrm-dataprep:latest"),
-        gpu_type=None,
-        gpu_count=0,
+        name=f"vrm-{stage}-{data_version}",
+        image=os.environ.get(image_env, default_image),
+        gpu_type=os.environ.get("VRM_GPU_TYPE_FILTER", "NVIDIA H200") if needs_gpu else None,
+        gpu_count=int(os.environ.get("VRM_GPU_COUNT_FILTER", "1")) if needs_gpu else 0,
         env=env,
-        # RunPod CPU pods cap container disk at 20-30 GB depending on flavor.
-        container_disk_in_gb=20,
-        # Dataprep uploads directly to HF Hub -- no need for RunPod's network
-        # volume. Detaching lets RunPod schedule in any DC with CPU capacity,
-        # not just the one the VRM volume lives in.
-        attach_volume=False,
+        # CPU pods on RunPod cap container disk at 20-30 GB; GPU pods get more.
+        container_disk_in_gb=200 if needs_gpu else 20,
+        # Filter needs GPU-bound DC; normalize/distill are DC-agnostic (CPU).
+        attach_volume=needs_gpu,
     )
     with RunPodClient() as c:
         pod_id = c.create_pod(spec)

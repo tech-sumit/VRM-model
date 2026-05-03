@@ -30,8 +30,14 @@ from vrm.data.normalize._driver import DEFAULT_SHARD_SIZE, normalize_dataset
 from vrm.data.recipe import Recipe, load_recipe
 from vrm.data.schema import Record
 from vrm.infra.hf_hub import dataset_repo_id, upload_dataset_shards
-from vrm.infra.r2 import R2Client, get_client
+from vrm.infra.r2 import R2Client, download_stage_to_local, get_client
 from vrm.infra.webhook import post_status
+
+STAGE_ALL = "all"
+STAGE_NORMALIZE = "normalize"
+STAGE_FILTER = "filter"
+STAGE_DISTILL = "distill"
+VALID_STAGES = (STAGE_ALL, STAGE_NORMALIZE, STAGE_FILTER, STAGE_DISTILL)
 
 
 def _normalize_one_source(
@@ -127,6 +133,115 @@ def _difficulty_provider_factory(model_id: str, k: int):
     return _provider
 
 
+def _run_normalize(
+    recipe: Recipe,
+    *,
+    norm_dir: Path,
+    data_version: str,
+    r2: R2Client | None,
+) -> dict[str, int]:
+    n_in = 0
+    n_out = 0
+    for sc in recipe.sources:
+        out = norm_dir / sc.source
+        out.mkdir(parents=True, exist_ok=True)
+        result = _normalize_one_source(sc.source, sc.cap, out_dir=out, r2=r2, data_version=data_version)
+        click.echo(f"[build] normalized {sc.source}: {result}")
+        n_in += result["records_in"]
+        n_out += result["records_out"]
+    return {"normalized_in": n_in, "normalized_out": n_out}
+
+
+def _run_filter(
+    recipe: Recipe,
+    *,
+    norm_dir: Path,
+    filt_dir: Path,
+    data_version: str,
+    base_model_id: str,
+    pass_k: int,
+    r2: R2Client | None,
+) -> dict[str, float]:
+    # Flatten normalized per-source shards into one directory so filter
+    # iterates in a single pass. When R2 is set, download any missing
+    # source shards that aren't already on this pod's local disk.
+    if r2 is not None:
+        sources = [sc.source for sc in recipe.sources]
+        report = download_stage_to_local(
+            r2,
+            data_version=data_version,
+            stage="normalized",
+            local_root=norm_dir,
+            sources=sources,
+            include_images=True,
+        )
+        click.echo(f"[build] downloaded normalized from R2: {report}")
+
+    norm_flat = norm_dir.parent / "normalized_flat"
+    norm_flat.mkdir(parents=True, exist_ok=True)
+    for src_dir in sorted(p for p in norm_dir.iterdir() if p.is_dir()):
+        for shard in sorted(src_dir.glob("shard-*.parquet")):
+            dst = norm_flat / f"{src_dir.name}-{shard.name}"
+            if not dst.exists():
+                dst.write_bytes(shard.read_bytes())
+
+    provider = _difficulty_provider_factory(base_model_id, pass_k)
+    return filter_shards(
+        norm_flat,
+        filt_dir,
+        difficulty_provider=provider,
+        lo=recipe.difficulty_lo,
+        hi=recipe.difficulty_hi,
+        r2=r2,
+        data_version=data_version,
+    )
+
+
+def _run_distill(
+    recipe: Recipe,
+    *,
+    filt_dir: Path,
+    distill_dir: Path,
+    data_version: str,
+    r2: R2Client | None,
+) -> dict[str, Any]:
+    if r2 is not None:
+        report = download_stage_to_local(
+            r2,
+            data_version=data_version,
+            stage="filtered",
+            local_root=filt_dir,
+            include_images=False,  # images referenced via record paths downloaded separately
+        )
+        click.echo(f"[build] downloaded filtered from R2: {report}")
+
+    if not recipe.distillation.enabled:
+        return {"records_in": 0, "records_out": 0, "skipped": True}
+
+    # filt_dir is structured as <source>/shard-*.parquet when downloaded
+    # from R2; flatten into a single directory for distill iteration.
+    filt_flat = filt_dir.parent / "filtered_flat"
+    filt_flat.mkdir(parents=True, exist_ok=True)
+    for p in filt_dir.rglob("shard-*.parquet"):
+        dst = filt_flat / (p.parent.name + "-" + p.name if p.parent != filt_dir else p.name)
+        if not dst.exists():
+            dst.write_bytes(p.read_bytes())
+    # Also copy any "all/" single-stage shards (filter output has all/).
+    for p in (filt_dir / "all").glob("shard-*.parquet") if (filt_dir / "all").exists() else []:
+        dst = filt_flat / p.name
+        if not dst.exists():
+            dst.write_bytes(p.read_bytes())
+
+    return asyncio.run(
+        distill_shards(
+            filt_flat,
+            distill_dir,
+            concurrency=recipe.distillation.concurrency,
+            data_version=data_version,
+        )
+    )
+
+
 def build_one_recipe(
     recipe: Recipe,
     *,
@@ -136,7 +251,11 @@ def build_one_recipe(
     pass_k: int,
     include_distillation: bool,
     upload: bool,
-) -> dict[str, int]:
+    stage: str = STAGE_ALL,
+) -> dict[str, Any]:
+    if stage not in VALID_STAGES:
+        raise ValueError(f"stage={stage!r} not in {VALID_STAGES}")
+
     norm_dir = work_dir / "normalized"
     filt_dir = work_dir / "filtered"
     distill_dir = work_dir / "distilled"
@@ -148,55 +267,52 @@ def build_one_recipe(
             err=True,
         )
 
-    n_in = 0
-    n_out = 0
-    for sc in recipe.sources:
-        out = norm_dir / sc.source
-        out.mkdir(parents=True, exist_ok=True)
-        result = _normalize_one_source(sc.source, sc.cap, out_dir=out, r2=r2, data_version=data_version)
-        click.echo(f"[build] normalized {sc.source}: {result}")
-        n_in += result["records_in"]
-        n_out += result["records_out"]
+    summary: dict[str, Any] = {"stage": stage}
 
-    norm_flat = work_dir / "normalized_flat"
-    norm_flat.mkdir(parents=True, exist_ok=True)
-    seen = 0
-    for src_dir in sorted(norm_dir.iterdir()):
-        for shard in sorted(src_dir.glob("shard-*.parquet")):
-            (norm_flat / f"{src_dir.name}-{shard.name}").write_bytes(shard.read_bytes())
-            seen += 1
+    if stage in (STAGE_ALL, STAGE_NORMALIZE):
+        summary |= _run_normalize(recipe, norm_dir=norm_dir, data_version=data_version, r2=r2)
+        if stage == STAGE_NORMALIZE:
+            return summary
 
-    provider = _difficulty_provider_factory(base_model_id, pass_k)
-    filter_result = filter_shards(
-        norm_flat,
-        filt_dir,
-        difficulty_provider=provider,
-        lo=recipe.difficulty_lo,
-        hi=recipe.difficulty_hi,
-    )
-
-    final_dir = filt_dir
-    if include_distillation and recipe.distillation.enabled:
-        distill_result = asyncio.run(
-            distill_shards(filt_dir, distill_dir, concurrency=recipe.distillation.concurrency)
+    if stage in (STAGE_ALL, STAGE_FILTER):
+        filter_result = _run_filter(
+            recipe,
+            norm_dir=norm_dir,
+            filt_dir=filt_dir,
+            data_version=data_version,
+            base_model_id=base_model_id,
+            pass_k=pass_k,
+            r2=r2,
         )
+        summary["filtered_kept"] = int(filter_result["records_out"])
+        summary["filter_kept_pct"] = float(filter_result.get("kept_pct", 0.0))
+        if stage == STAGE_FILTER:
+            return summary
+
+    if stage in (STAGE_ALL, STAGE_DISTILL):
         final_dir = distill_dir
-    else:
-        distill_result = {
-            "records_in": int(filter_result["records_out"]),
-            "records_out": int(filter_result["records_out"]),
-        }
+        if include_distillation and recipe.distillation.enabled:
+            distill_result = _run_distill(
+                recipe,
+                filt_dir=filt_dir,
+                distill_dir=distill_dir,
+                data_version=data_version,
+                r2=r2,
+            )
+            summary["distilled_kept"] = int(distill_result.get("records_out", 0))
+            summary["credits_usd"] = float(distill_result.get("credits_usd", 0.0))
+            if distill_result.get("paused"):
+                summary["distill_paused"] = True
+        else:
+            final_dir = filt_dir
+            summary["distilled_kept"] = summary.get("filtered_kept", 0)
 
-    if upload:
-        repo_id = dataset_repo_id(recipe.name, data_version)
-        upload_dataset_shards(final_dir, repo_id)
+        if upload:
+            repo_id = dataset_repo_id(recipe.name, data_version)
+            upload_dataset_shards(final_dir, repo_id)
+            summary["uploaded_to"] = repo_id
 
-    return {
-        "normalized_in": n_in,
-        "normalized_out": n_out,
-        "filtered_kept": int(filter_result["records_out"]),
-        "distilled_kept": int(distill_result["records_out"]),
-    }
+    return summary
 
 
 @click.command()
@@ -231,7 +347,17 @@ def build_one_recipe(
     "--upload/--no-upload",
     default=True,
     show_default=True,
-    help="Upload final shards to HF dataset repo",
+    help="Upload final shards to HF dataset repo (only in distill/all stages)",
+)
+@click.option(
+    "--stage",
+    type=click.Choice(list(VALID_STAGES), case_sensitive=False),
+    default=STAGE_ALL,
+    show_default=True,
+    help=(
+        "Which pipeline stage to run. 'normalize' (CPU), 'filter' (GPU vLLM), "
+        "'distill' (CPU + OpenRouter), or 'all' for the full pipeline on one pod."
+    ),
 )
 def main(
     recipe_paths: tuple[Path, ...],
@@ -241,14 +367,18 @@ def main(
     pass_k: int,
     include_distillation: bool,
     upload: bool,
+    stage: str,
 ) -> None:
     """Build dataset shards from one or more recipes."""
-    run_name = f"dataprep-{data_version}"
-    summary: dict[str, object] = {}
+    run_name = f"dataprep-{stage}-{data_version}"
+    task_label = f"dataprep-{stage}"
+    summary: dict[str, Any] = {}
     try:
         for rp in recipe_paths:
             recipe = load_recipe(rp)
-            click.echo(f"[build] recipe={recipe.name} sources={[s.source for s in recipe.sources]}")
+            click.echo(
+                f"[build] stage={stage} recipe={recipe.name} sources={[s.source for s in recipe.sources]}"
+            )
             sub_work = work_dir / recipe.name
             sub_work.mkdir(parents=True, exist_ok=True)
             result = build_one_recipe(
@@ -259,13 +389,14 @@ def main(
                 pass_k=pass_k,
                 include_distillation=include_distillation,
                 upload=upload,
+                stage=stage,
             )
             summary[recipe.name] = result
             click.echo(f"[build] {recipe.name}: {result}")
     except Exception as e:
         post_status(
             "failure",
-            task="dataprep",
+            task=task_label,
             run_name=run_name,
             payload={"error": str(e), "summary": summary},
         )
@@ -273,13 +404,12 @@ def main(
 
     post_status(
         "completed",
-        task="dataprep",
+        task=task_label,
         run_name=run_name,
         payload={
             "data_version": data_version,
+            "stage": stage,
             "summary": summary,
-            "datasets": [dataset_repo_id(name, data_version) for name in summary],
-            "include_distillation": include_distillation,
         },
     )
 

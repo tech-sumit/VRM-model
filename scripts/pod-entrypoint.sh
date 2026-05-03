@@ -83,6 +83,8 @@ case "$VRM_TASK" in
         ;;
     dataprep)
         # VRM_CONFIG may be a comma-separated list of recipe YAML paths.
+        # VRM_STAGE selects normalize|filter|distill|all (default all for
+        # backwards compatibility with single-pod runs).
         IFS=',' read -ra _RECIPES <<< "${VRM_CONFIG:?}"
         _RECIPE_ARGS=()
         for r in "${_RECIPES[@]}"; do _RECIPE_ARGS+=("--recipe" "$r"); done
@@ -90,10 +92,19 @@ case "$VRM_TASK" in
         if [[ "${VRM_INCLUDE_DISTILLATION:-true}" == "false" ]]; then
             _DISTILL_FLAG="--no-distillation"
         fi
+        _STAGE="${VRM_STAGE:-all}"
+        # Normalize + filter stages should NOT upload to HF Hub -- only the
+        # final distill stage produces publish-ready shards.
+        _UPLOAD_FLAG="--no-upload"
+        if [[ "$_STAGE" == "distill" || "$_STAGE" == "all" ]]; then
+            _UPLOAD_FLAG="--upload"
+        fi
         python -m vrm.data.build \
             "${_RECIPE_ARGS[@]}" \
             --data-version "${DATA_VERSION:?}" \
-            "$_DISTILL_FLAG" 2>&1 | tee /tmp/vrm-task.log
+            --stage "$_STAGE" \
+            "$_DISTILL_FLAG" \
+            "$_UPLOAD_FLAG" 2>&1 | tee /tmp/vrm-task.log
         task_rc=${PIPESTATUS[0]}
         ;;
     *)

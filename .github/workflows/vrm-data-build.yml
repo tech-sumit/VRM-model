@@ -7,20 +7,30 @@ on:
         description: "Data version tag (e.g. v1, dev-2026-05-03)"
         required: true
         type: string
-        default: "dev"
+        default: "v1"
+      stage:
+        description: "Pipeline stage: normalize (CPU), filter (GPU H200), distill (CPU+OpenRouter), or all"
+        required: true
+        type: choice
+        options:
+          - normalize
+          - filter
+          - distill
+          - all
+        default: normalize
       include_distillation:
-        description: "Run teacher distillation (Claude + GPT-4o) after pass@K filter"
+        description: "Run teacher distillation (only applies to distill/all stages)"
         required: true
         type: boolean
         default: true
       debug_hold:
-        description: "Keep pod alive after task exits (SSH in to debug). Costs $0.06/hr until manually destroyed."
+        description: "Keep pod alive after task exits (SSH in to debug)"
         required: false
         type: boolean
         default: false
 
 concurrency:
-  group: vrm-data-${{ inputs.data_version }}
+  group: vrm-data-${{ inputs.data_version }}-${{ inputs.stage }}
   cancel-in-progress: false
 
 jobs:
@@ -62,8 +72,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN_FOR_DISPATCH: ${{ secrets.GH_TOKEN_FOR_DISPATCH }}
           VRM_DATAPREP_IMAGE: ${{ vars.VRM_DATAPREP_IMAGE }}
+          VRM_TRAIN_IMAGE: ${{ vars.VRM_TRAIN_IMAGE }}
           VRM_NETWORK_VOLUME_ID: ${{ vars.VRM_NETWORK_VOLUME_ID }}
           VRM_REGION: ${{ vars.VRM_REGION }}
+          VRM_GPU_TYPE_FILTER: ${{ vars.VRM_GPU_TYPE_FILTER }}
+          VRM_GPU_COUNT_FILTER: ${{ vars.VRM_GPU_COUNT_FILTER }}
           VRM_MAX_USD_DATAPREP: ${{ vars.VRM_MAX_USD_DATAPREP }}
           VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
           VRM_GIT_REF: ${{ github.sha }}
@@ -78,20 +91,27 @@ jobs:
               --recipe configs/data/sft_recipe.yaml \
               --recipe configs/data/rl_recipe.yaml \
               --data-version "${{ inputs.data_version }}" \
+              --stage "${{ inputs.stage }}" \
               $DISTILL_FLAG)
           echo "pod_id=$POD_ID" >> $GITHUB_OUTPUT
-          echo "Launched pod $POD_ID"
+          echo "Launched ${{ inputs.stage }} pod $POD_ID"
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "## VRM data build launched"
+            echo "## VRM data build launched (stage: ${{ inputs.stage }})"
             echo "- pod: \`${{ steps.launch.outputs.pod_id }}\`"
             echo "- data_version: \`${{ inputs.data_version }}\`"
+            echo "- stage: \`${{ inputs.stage }}\`"
             echo "- distillation: \`${{ inputs.include_distillation }}\`"
             echo "- monitor: https://www.runpod.io/console/pods/${{ steps.launch.outputs.pod_id }}"
             echo ""
-            echo "Pod will report \`vrm-dataprep-completed\` via repository_dispatch on success."
+            echo "When this stage completes, trigger the next one:"
+            case "${{ inputs.stage }}" in
+              normalize) echo "- next: rerun this workflow with \`stage=filter\`" ;;
+              filter)    echo "- next: rerun this workflow with \`stage=distill\`" ;;
+              distill)   echo "- next: data is uploaded to HF Hub; run training workflows" ;;
+            esac
           } >> $GITHUB_STEP_SUMMARY
 
