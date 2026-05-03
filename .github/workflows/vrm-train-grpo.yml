@@ -1,0 +1,78 @@
+name: vrm-train-grpo
+
+on:
+  workflow_dispatch:
+    inputs:
+      sft_checkpoint:
+        description: "HF model repo (Stage 1 output, e.g. tech-sumit/vrm-7b-sft-2026-05-03)"
+        required: true
+        type: string
+      data_version:
+        description: "RL data version tag"
+        required: true
+        type: string
+      run_name:
+        description: "Run name (e.g. grpo-2026-05-04)"
+        required: true
+        type: string
+
+concurrency:
+  group: vrm-train-grpo-${{ inputs.run_name }}
+  cancel-in-progress: false
+
+jobs:
+  launch-pod:
+    name: launch GRPO pod on RunPod
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+
+      - name: Launch RunPod GRPO pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ORG: ${{ vars.HF_ORG }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: ${{ vars.WANDB_PROJECT }}
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          SLACK_WEBHOOK_VRM: ${{ secrets.SLACK_WEBHOOK_VRM }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN_FOR_DISPATCH: ${{ secrets.GH_TOKEN_FOR_DISPATCH }}
+          VRM_TRAIN_IMAGE: ${{ vars.VRM_TRAIN_IMAGE }}
+          VRM_NETWORK_VOLUME_ID: ${{ vars.VRM_NETWORK_VOLUME_ID }}
+          VRM_REGION: ${{ vars.VRM_REGION }}
+          VRM_GPU_TYPE_TRAIN: ${{ vars.VRM_GPU_TYPE_TRAIN }}
+          VRM_GPU_COUNT_TRAIN: ${{ vars.VRM_GPU_COUNT_TRAIN }}
+          VRM_MAX_USD_GRPO: ${{ vars.VRM_MAX_USD_GRPO }}
+          VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
+          VRM_GIT_REF: ${{ github.sha }}
+        id: launch
+        run: |
+          POD_ID=$(uv run vrm runpod launch-train \
+              --stage grpo \
+              --config configs/stage2_grpo.yaml \
+              --sft-checkpoint "${{ inputs.sft_checkpoint }}" \
+              --data-version "${{ inputs.data_version }}" \
+              --run-name "${{ inputs.run_name }}")
+          echo "pod_id=$POD_ID" >> $GITHUB_OUTPUT
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## VRM Stage 2 GRPO launched"
+            echo "- pod: \`${{ steps.launch.outputs.pod_id }}\`"
+            echo "- run: \`${{ inputs.run_name }}\`"
+            echo "- sft_checkpoint: \`${{ inputs.sft_checkpoint }}\`"
+            echo "- expected duration: 10-14 days"
+            echo "- budget tripwire: \$${{ vars.VRM_MAX_USD_GRPO }}"
+            echo "- monitor: https://www.runpod.io/console/pods/${{ steps.launch.outputs.pod_id }}"
+            echo "- W&B: https://wandb.ai/${{ vars.WANDB_ENTITY }}/${{ vars.WANDB_PROJECT }}/runs/${{ inputs.run_name }}"
+          } >> $GITHUB_STEP_SUMMARY

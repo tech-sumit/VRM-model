@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build
+build/
+dist/
+*.whl
+
+# Local env
+.env
+*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Datasets / models / weights -- never commit large blobs
+# Anchor with leading slash so `src/vrm/data/` (code package) is NOT ignored.
+/data/
+/checkpoints/
+/runs/
+/wandb/
+/outputs/
+*.pt
+*.bin
+*.safetensors
+*.gguf
+*.parquet
+
+# Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints

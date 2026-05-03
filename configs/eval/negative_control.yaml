@@ -1,0 +1,21 @@
+# Spec §5.2 negative control. Dual purpose:
+# 1) DocVQA + ChartQA: post-RL gains should NOT exceed +1.5pp here -- if they
+#    do, RL likely degraded vision grounding. (These are vision-grounded
+#    benchmarks where the math-RL signal shouldn't help.)
+# 2) MathVista with image scrambled: drop should be >= 15pp vs unscrambled.
+#    If not, model is solving via language shortcut, not visual reasoning.
+name: negative_control
+benchmarks:
+  - DocVQA_VAL
+  - ChartQA_TEST
+  - MathVista_MINI
+seeds: [42]
+batch_size: 8
+max_new_tokens: 4096
+temperature: 0.0
+# Applied only to MathVista_MINI rerun (handled by run_vlmevalkit.py)
+image_transform: scramble
+acceptance:
+  docvqa_max_delta_pp: 1.5
+  chartqa_max_delta_pp: 1.5
+  mathvista_min_drop_when_scrambled_pp: 15

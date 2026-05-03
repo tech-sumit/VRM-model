@@ -1,0 +1,100 @@
+[project]
+name = "vrm"
+version = "0.1.0"
+description = "VRM-7B: Visual Reasoning Model training & evaluation toolchain"
+requires-python = ">=3.11,<3.12"
+authors = [{ name = "Sumit Agrawal", email = "mr.sumitagrawal.17@gmail.com" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "rich>=13.7",
+    "httpx>=0.27",
+    "tenacity>=8.5",
+    "datasets>=2.20",
+    "huggingface-hub>=0.24",
+    "python-dotenv>=1.0",
+    "sympy>=1.13",
+    "antlr4-python3-runtime>=4.11,<4.12",
+    "regex>=2024.5",
+    "pillow>=10.4",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "torch==2.4.0",
+    "transformers>=4.45",
+    "accelerate>=0.34",
+    "peft>=0.12",
+    "trl>=0.11",
+    "deepspeed>=0.15",
+    "bitsandbytes>=0.43",
+    "wandb>=0.17",
+    "vllm>=0.6.2",
+    "flash-attn>=2.6.3",
+    "qwen-vl-utils>=0.0.8",
+]
+eval = [
+    "torch==2.4.0",
+    "transformers>=4.45",
+    "qwen-vl-utils>=0.0.8",
+    # vlmeval / VLMEvalKit is installed from git inside docker/eval.Dockerfile
+    # (not on PyPI as `vlmeval` -- see https://github.com/open-compass/VLMEvalKit)
+]
+distill = [
+    "anthropic>=0.34",
+    "openai>=1.40",
+]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "respx>=0.21",
+]
+
+[project.scripts]
+vrm = "vrm.cli:main"
+vrm-webhook = "vrm.infra.webhook:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vrm"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vrm"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"
+reportMissingImports = "warning"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires network or large fixtures",
+    "gpu: requires CUDA",
+]

@@ -1,0 +1,7 @@
+name: quick
+benchmarks:
+  - MathVista_MINI
+seeds: [42]
+batch_size: 8
+max_new_tokens: 4096
+temperature: 0.0

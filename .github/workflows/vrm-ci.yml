@@ -1,0 +1,103 @@
+name: vrm-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vrm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint + typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync dependencies
+        run: uv sync --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check src tests
+
+      - name: Ruff format check
+        run: uv run ruff format --check src tests
+
+      - name: Pyright typecheck
+        run: uv run pyright
+
+      - name: Pytest (no GPU/integration)
+        run: uv run pytest -m "not gpu and not integration" --cov=src/vrm --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrm-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  images:
+    name: build & push images to GHCR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: vrm-train
+            dockerfile: docker/train.Dockerfile
+          - name: vrm-eval
+            dockerfile: docker/eval.Dockerfile
+          - name: vrm-dataprep
+            dockerfile: docker/dataprep.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:latest
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:sha-${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

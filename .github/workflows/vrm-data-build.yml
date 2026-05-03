@@ -1,0 +1,82 @@
+name: vrm-data-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_version:
+        description: "Data version tag (e.g. v1, dev-2026-05-03)"
+        required: true
+        type: string
+        default: "dev"
+      include_distillation:
+        description: "Run teacher distillation (Claude + GPT-4o) after pass@K filter"
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: vrm-data-${{ inputs.data_version }}
+  cancel-in-progress: false
+
+jobs:
+  launch-pod:
+    name: launch dataprep pod on RunPod
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+
+      - name: Launch RunPod dataprep pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ORG: ${{ vars.HF_ORG }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: ${{ vars.WANDB_PROJECT }}
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          SLACK_WEBHOOK_VRM: ${{ secrets.SLACK_WEBHOOK_VRM }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN_FOR_DISPATCH: ${{ secrets.GH_TOKEN_FOR_DISPATCH }}
+          VRM_DATAPREP_IMAGE: ${{ vars.VRM_DATAPREP_IMAGE }}
+          VRM_NETWORK_VOLUME_ID: ${{ vars.VRM_NETWORK_VOLUME_ID }}
+          VRM_REGION: ${{ vars.VRM_REGION }}
+          VRM_MAX_USD_DATAPREP: ${{ vars.VRM_MAX_USD_DATAPREP }}
+          VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
+          VRM_GIT_REF: ${{ github.sha }}
+        id: launch
+        run: |
+          DISTILL_FLAG="--include-distillation"
+          if [[ "${{ inputs.include_distillation }}" == "false" ]]; then
+            DISTILL_FLAG="--no-distillation"
+          fi
+          POD_ID=$(uv run vrm runpod launch-dataprep \
+              --recipe configs/data/sft_recipe.yaml \
+              --recipe configs/data/rl_recipe.yaml \
+              --data-version "${{ inputs.data_version }}" \
+              $DISTILL_FLAG)
+          echo "pod_id=$POD_ID" >> $GITHUB_OUTPUT
+          echo "Launched pod $POD_ID"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## VRM data build launched"
+            echo "- pod: \`${{ steps.launch.outputs.pod_id }}\`"
+            echo "- data_version: \`${{ inputs.data_version }}\`"
+            echo "- distillation: \`${{ inputs.include_distillation }}\`"
+            echo "- monitor: https://www.runpod.io/console/pods/${{ steps.launch.outputs.pod_id }}"
+            echo ""
+            echo "Pod will report \`vrm-dataprep-completed\` via repository_dispatch on success."
+          } >> $GITHUB_STEP_SUMMARY

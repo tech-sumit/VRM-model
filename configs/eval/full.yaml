@@ -1,0 +1,14 @@
+name: full
+benchmarks:
+  - MathVista_MINI
+  - MathVerse_MINI
+  - MathVision
+  - MMMU_Pro
+  - WeMath
+  - BLINK
+  - LogicVista
+  - OlympiadBench-Vision
+seeds: [42, 1337, 2024]
+batch_size: 8
+max_new_tokens: 8192
+temperature: 0.0

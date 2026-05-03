@@ -1,0 +1,21 @@
+name: sft
+target_size: 280000
+difficulty_lo: 0.1
+difficulty_hi: 0.85
+sources:
+  - source: mavis
+    cap: 80000
+  - source: mathv360k
+    cap: 60000
+  - source: vision_r1_cold
+    cap: 50000
+  - source: geo170k
+    cap: 30000
+  - source: chartqa
+    cap: 30000
+  - source: mm_eureka
+    cap: 30000
+distillation:
+  enabled: true
+  concurrency: 16
+  ensemble: [claude, openai]

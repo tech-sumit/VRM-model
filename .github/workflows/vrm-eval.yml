@@ -1,0 +1,101 @@
+name: vrm-eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      checkpoint:
+        description: "HF model repo to eval (e.g. tech-sumit/vrm-7b-grpo-2026-05-04)"
+        required: true
+        type: string
+      suite:
+        description: "Eval suite name"
+        required: true
+        type: choice
+        options: [full, quick, negative_control]
+        default: full
+  repository_dispatch:
+    types:
+      - vrm-sft-completed
+      - vrm-grpo-completed
+      - vrm-rejection-completed
+
+concurrency:
+  group: vrm-eval-${{ github.event.inputs.checkpoint || github.event.client_payload.checkpoint }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve checkpoint + suite
+    runs-on: ubuntu-latest
+    outputs:
+      checkpoint: ${{ steps.r.outputs.checkpoint }}
+      suite: ${{ steps.r.outputs.suite }}
+      run_name: ${{ steps.r.outputs.run_name }}
+    steps:
+      - id: r
+        run: |
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            CHECKPOINT="${{ github.event.client_payload.checkpoint }}"
+            case "${{ github.event.action }}" in
+              vrm-grpo-completed) SUITE=full ;;
+              *) SUITE=quick ;;
+            esac
+          else
+            CHECKPOINT="${{ inputs.checkpoint }}"
+            SUITE="${{ inputs.suite }}"
+          fi
+          echo "checkpoint=$CHECKPOINT" >> $GITHUB_OUTPUT
+          echo "suite=$SUITE" >> $GITHUB_OUTPUT
+          echo "run_name=eval-${SUITE}-${CHECKPOINT##*/}" >> $GITHUB_OUTPUT
+
+  launch-pod:
+    name: launch eval pod
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+
+      - name: Launch RunPod eval pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ORG: ${{ vars.HF_ORG }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: ${{ vars.WANDB_PROJECT }}
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          SLACK_WEBHOOK_VRM: ${{ secrets.SLACK_WEBHOOK_VRM }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN_FOR_DISPATCH: ${{ secrets.GH_TOKEN_FOR_DISPATCH }}
+          VRM_EVAL_IMAGE: ${{ vars.VRM_EVAL_IMAGE }}
+          VRM_NETWORK_VOLUME_ID: ${{ vars.VRM_NETWORK_VOLUME_ID }}
+          VRM_REGION: ${{ vars.VRM_REGION }}
+          VRM_GPU_TYPE_EVAL: ${{ vars.VRM_GPU_TYPE_EVAL }}
+          VRM_GPU_COUNT_EVAL: ${{ vars.VRM_GPU_COUNT_EVAL }}
+          VRM_MAX_USD_EVAL: ${{ vars.VRM_MAX_USD_EVAL }}
+          VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
+          VRM_GIT_REF: ${{ github.sha }}
+        id: launch
+        run: |
+          POD_ID=$(uv run vrm runpod launch-eval \
+              --checkpoint "${{ needs.resolve.outputs.checkpoint }}" \
+              --suite "${{ needs.resolve.outputs.suite }}")
+          echo "pod_id=$POD_ID" >> $GITHUB_OUTPUT
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## VRM eval launched"
+            echo "- pod: \`${{ steps.launch.outputs.pod_id }}\`"
+            echo "- checkpoint: \`${{ needs.resolve.outputs.checkpoint }}\`"
+            echo "- suite: \`${{ needs.resolve.outputs.suite }}\`"
+            echo "- run_name: \`${{ needs.resolve.outputs.run_name }}\`"
+            echo "- monitor: https://www.runpod.io/console/pods/${{ steps.launch.outputs.pod_id }}"
+          } >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,93 @@
+name: vrm-release
+
+on:
+  push:
+    tags:
+      - "vrm-7b-v*.*.*"
+
+jobs:
+  release:
+    name: promote weights + create GH Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+
+      - name: Resolve source repo from annotated tag
+        id: src
+        run: |
+          MSG=$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")
+          SRC=$(echo "$MSG" | sed -nE 's/.*source=([^ ]+).*/\1/p')
+          if [[ -z "$SRC" ]]; then
+            echo "Tag message must contain 'source=<hf-repo-id>'" >&2
+            exit 2
+          fi
+          echo "source=$SRC" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF_NAME#vrm-7b-}" >> $GITHUB_OUTPUT
+
+      - name: Promote private weights to public HF model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ORG: ${{ vars.HF_ORG }}
+        run: |
+          uv run python scripts/release-promote.py \
+              --source "${{ steps.src.outputs.source }}" \
+              --destination "${HF_ORG}/vrm-7b" \
+              --tag "${{ steps.src.outputs.version }}"
+
+      - name: Try to fetch eval-summary from source repo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set +e
+          uv run python -c "
+          import os, sys
+          from huggingface_hub import hf_hub_download
+          try:
+              p = hf_hub_download(
+                  repo_id='${{ steps.src.outputs.source }}',
+                  filename='eval-summary.md',
+                  repo_type='model',
+                  token=os.environ['HF_TOKEN'],
+              )
+              import shutil; shutil.copy(p, 'eval-summary.md')
+              print('OK fetched eval-summary.md')
+          except Exception as e:
+              print(f'no eval-summary.md (skipping): {e}', file=sys.stderr)
+              with open('eval-summary.md', 'w') as f:
+                  f.write('_No eval summary attached at release time._\n')
+          "
+
+      - name: Compose release notes
+        run: |
+          {
+            echo "# VRM-7B ${{ steps.src.outputs.version }}"
+            echo ""
+            echo "Source HF repo: \`${{ steps.src.outputs.source }}\`"
+            echo "Public weights: \`${{ vars.HF_ORG }}/vrm-7b\`"
+            echo ""
+            echo "## Eval summary"
+            echo ""
+            cat eval-summary.md
+          } > release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+              --title "VRM-7B ${{ steps.src.outputs.version }}" \
+              --notes-file release-notes.md \
+              eval-summary.md \
+              VRM-7B_model_spec.md
