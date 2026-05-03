@@ -33,7 +33,9 @@ def _is_pil(x: Any) -> bool:
     return hasattr(x, "save") and hasattr(x, "mode") and hasattr(x, "size")
 
 
-def _persist_pil_fields(raw: dict[str, Any], *, images_dir: Path, rec_index: int, source: str) -> dict[str, Any]:
+def _persist_pil_fields(
+    raw: dict[str, Any], *, images_dir: Path, rec_index: int, source: str
+) -> dict[str, Any]:
     """Return a copy of raw with PIL values replaced by relative paths."""
     out = dict(raw)
     img_idx = 0
