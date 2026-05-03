@@ -17,6 +17,10 @@ class NormalizeSpec:
     normalize: NormalizeFn
     image_column: str | None = None
     config: str | None = None
+    # Optional data_files hint forwarded to datasets.load_dataset, used when
+    # the HF repo ships multiple JSONs with incompatible schemas (e.g.
+    # Osilly/Vision-R1-cold has two unrelated JSONs at the repo root).
+    data_files: str | None = None
     default_verifier: str = "exact_numeric"
 
 
@@ -28,9 +32,10 @@ SYSTEM_PROMPT = (
 
 
 def _verifier_for(answer_type: str) -> str:
-    return {
-        "numeric": "exact_numeric",
-        "multiple_choice": "normalize_choice",
-        "latex_math": "math_equal",
-        "span": "span_match",
-    }.get(answer_type, "exact_numeric")
+    if answer_type == "multiple_choice":
+        return "normalize_choice"
+    if answer_type == "latex_math":
+        return "math_equal"
+    if answer_type == "span":
+        return "span_match"
+    return "exact_numeric"

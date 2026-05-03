@@ -1,21 +1,19 @@
 name: rl
-target_size: 110000
+# Target reduced from spec's 110K after audit (2026-05-03). MathVista and
+# We-Math have no train split on HF (testmini only) so they cannot be used
+# for RL. MM-Eureka audit stalled -- revisit once we can download it in
+# isolation. For now rely on the datasets with real train splits.
+target_size: 40000
 difficulty_lo: 0.1
 difficulty_hi: 0.85
 sources:
-  - source: mm_eureka
-    cap: 54000
   - source: geometry3k
     cap: 2100
-  - source: mathvista
-    cap: 5100
-  - source: we_math
-    cap: 6500
   - source: geoqa
     cap: 8000
-  - source: tabmwp
-    cap: 10000
   - source: chartqa
-    cap: 10000
+    cap: 28000
+  - source: mavis
+    cap: 800
 distillation:
   enabled: false

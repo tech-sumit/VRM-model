@@ -36,9 +36,15 @@ def _normalize_one_source(source: str, cap: int, *, out_dir: Path) -> dict[str, 
     from datasets import load_dataset
 
     spec = REGISTRY[source]
-    ds = load_dataset(
-        spec.hf_id, name=spec.config, split=spec.split, streaming=False, verification_mode="no_checks"
-    )
+    load_kwargs: dict[str, object] = {
+        "name": spec.config,
+        "split": spec.split,
+        "streaming": False,
+        "verification_mode": "no_checks",
+    }
+    if getattr(spec, "data_files", None):
+        load_kwargs["data_files"] = spec.data_files
+    ds = load_dataset(spec.hf_id, **load_kwargs)
     n = min(cap, len(ds))
     ds = ds.select(range(n))
     return normalize_dataset(

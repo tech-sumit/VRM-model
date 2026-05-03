@@ -1,20 +1,26 @@
 name: sft
-target_size: 280000
+# Target reduced from spec's 280K after dataset availability audit (2026-05-03):
+# MAVIS-Instruct 834K was never open-sourced (only 800-row MAVIS-Geometry
+# is public), so effective SFT corpus is bounded by the LLaVA-convo trio
+# + small per-source datasets. Caps reflect real HF dataset sizes.
+target_size: 150000
 difficulty_lo: 0.1
 difficulty_hi: 0.85
 sources:
-  - source: mavis
-    cap: 80000
   - source: mathv360k
-    cap: 60000
+    cap: 60000          # 338K available
   - source: vision_r1_cold
-    cap: 50000
+    cap: 50000          # 63K available (llava_cot variant)
   - source: geo170k
-    cap: 30000
+    cap: 30000          # 117K available (qa_tuning split)
   - source: chartqa
-    cap: 30000
-  - source: mm_eureka
-    cap: 30000
+    cap: 28000          # 28K available
+  - source: geometry3k
+    cap: 2100           # 2.1K available
+  - source: geoqa
+    cap: 8000           # 8K available
+  - source: mavis
+    cap: 800            # 800 available (only partial release)
 distillation:
   enabled: true
   concurrency: 16

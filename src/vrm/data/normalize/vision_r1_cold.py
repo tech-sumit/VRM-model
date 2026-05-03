@@ -1,43 +1,22 @@
-"""Vision-R1-cold (distilled long-CoT) normalizer.
+"""Vision-R1-cold normalizer (Osilly/Vision-R1-cold).
 
-This dataset already contains assistant CoT in `<think>...</think><answer>...</answer>`
-format -- we preserve it as the assistant turn, so it's directly SFT-ready.
+The repo ships two JSONs with mismatched columns
+(vision_r1_llava_cot_full.json has {id,image,conversations};
+ vision_r1_mulberry_sft_full.json has {images,conversations}).
+Pinning to the llava_cot variant via data_files avoids the schema clash
+that kills datasets.load_dataset when it tries to merge both.
 """
 
 from __future__ import annotations
 
-from vrm.data.normalize._base import SYSTEM_PROMPT, NormalizeSpec, _verifier_for
-from vrm.data.schema import Message, Record
-
-
-def normalize(raw: dict) -> Record | None:
-    image = raw.get("image")
-    answer = (raw.get("answer") or "").strip()
-    if not image or not answer:
-        return None
-    answer_type = raw.get("answer_type") or "numeric"
-    question = raw.get("question") or raw.get("instruction") or ""
-    distilled = raw.get("response") or raw.get("solution") or ""
-    messages: list[Message] = [
-        Message(role="system", content=SYSTEM_PROMPT),
-        Message(role="user", content=f"<image>\n{question}"),
-    ]
-    if distilled:
-        messages.append(Message(role="assistant", content=distilled))
-    return Record(
-        id=str(raw.get("id") or hash(question)),
-        images=[str(image)],
-        messages=messages,
-        answer=answer,
-        answer_type=answer_type,  # type: ignore[arg-type]
-        verifier=_verifier_for(answer_type),  # type: ignore[arg-type]
-        tolerance=0.001 if answer_type == "numeric" else 0.0,
-        source="vision_r1_cold",
-    )
-
+from vrm.data.normalize._base import NormalizeSpec
+from vrm.data.normalize._llava_convo import make_normalizer
 
 SPEC = NormalizeSpec(
     hf_id="Osilly/Vision-R1-cold",
     split="train",
-    normalize=normalize,
+    normalize=make_normalizer("vision_r1_cold"),
+    default_verifier="span_match",
+    data_files="vision_r1_llava_cot_full.json",
 )
+normalize = SPEC.normalize
