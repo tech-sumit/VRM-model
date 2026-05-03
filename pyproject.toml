@@ -34,7 +34,10 @@ train = [
     "bitsandbytes>=0.43",
     "wandb>=0.17",
     "vllm>=0.6.2",
-    "flash-attn>=2.6.3",
+    # flash-attn is installed directly inside docker/train.Dockerfile with
+    # --no-build-isolation after torch is already on disk. It cannot be
+    # resolved by `uv pip install` in one shot because its setup.py imports
+    # torch at build time, and uv parallelizes downloads.
     "qwen-vl-utils>=0.0.8",
 ]
 eval = [

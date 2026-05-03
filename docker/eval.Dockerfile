@@ -22,9 +22,12 @@ COPY src ./src
 RUN uv pip install --system --no-deps -e . \
     && uv pip install --system --extra eval -r pyproject.toml --resolution=highest
 
-# VLMEvalKit (canonical eval harness; not on PyPI under expected name -- pin from git)
-ARG VLMEVALKIT_REF=v0.3.5
-RUN git clone --depth 1 --branch ${VLMEVALKIT_REF} https://github.com/open-compass/VLMEvalKit.git /opt/VLMEvalKit \
+# VLMEvalKit (canonical eval harness; not on PyPI under expected name -- pin from git).
+# Upstream tagging cadence is irregular; use main@commit for reproducibility.
+# Bump this SHA to upgrade. To see options: git ls-remote --tags https://github.com/open-compass/VLMEvalKit.git
+ARG VLMEVALKIT_REF=main
+RUN git clone https://github.com/open-compass/VLMEvalKit.git /opt/VLMEvalKit \
+    && cd /opt/VLMEvalKit && git checkout ${VLMEVALKIT_REF} \
     && uv pip install --system -e /opt/VLMEvalKit
 
 WORKDIR /workspace/vrm
