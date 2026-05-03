@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 import os
 import tarfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -172,61 +174,86 @@ def download_stage_to_local(
     local_root.mkdir(parents=True, exist_ok=True)
     prefix = f"vrm/{data_version}/{stage}/"
     keys = r2.list_prefix(prefix)
-    n_parquet = 0
-    n_images = 0
-    n_state = 0
-    n_tars = 0
-    image_tars: list[tuple[str, Path]] = []
 
-    for key in keys:
+    download_workers = int(os.environ.get("VRM_R2_DOWNLOAD_WORKERS", "32"))
+
+    def _classify(key: str) -> tuple[str | None, str, bool]:
+        """Return (source, kind, should_download). kind in {parquet,tar,loose,state,skip}."""
         rel = key[len(prefix) :]
         parts = rel.split("/")
         if not parts or not parts[0]:
-            continue
+            return None, "skip", False
         source = parts[0]
         if sources is not None and source not in sources:
-            continue
-
+            return None, "skip", False
         is_image_tar = key.endswith("-images.tar")
         is_loose_image = "/images/" in key
         if not include_images and (is_image_tar or is_loose_image):
-            continue
+            return None, "skip", False
+        if key.endswith(".parquet"):
+            return source, "parquet", True
+        if is_image_tar:
+            return source, "tar", True
+        if is_loose_image:
+            return source, "loose", True
+        if key.endswith("_state.json"):
+            return source, "state", True
+        return source, "skip", False
 
-        local_path = local_root / rel
-        if local_path.exists():
-            if key.endswith(".parquet"):
-                n_parquet += 1
-            elif is_loose_image:
-                n_images += 1
-            elif is_image_tar:
-                n_tars += 1
-                image_tars.append((source, local_path))
-            elif key.endswith("_state.json"):
-                n_state += 1
+    # Partition keys by work type and skip any that are already on disk.
+    todo: list[tuple[str, Path, str, str]] = []  # (key, local_path, source, kind)
+    image_tars: list[tuple[str, Path]] = []
+    n = {"parquet": 0, "tar": 0, "loose": 0, "state": 0}
+    for key in keys:
+        source, kind, should_download = _classify(key)
+        if not should_download or source is None:
             continue
-        if r2.download_to(key, local_path):
-            if key.endswith(".parquet"):
-                n_parquet += 1
-            elif is_loose_image:
-                n_images += 1
-            elif is_image_tar:
-                n_tars += 1
+        local_path = local_root / key[len(prefix) :]
+        if local_path.exists() and local_path.stat().st_size > 0:
+            n[kind] += 1
+            if kind == "tar":
                 image_tars.append((source, local_path))
-            elif key.endswith("_state.json"):
-                n_state += 1
+            continue
+        todo.append((key, local_path, source, kind))
 
-    # Extract each image tar into the source's images/ subdir so downstream
-    # code sees loose JPEGs just like the old layout (records reference
-    # "images/<fname>.jpg" paths).
-    for source, tar_path in image_tars:
+    tars_lock = threading.Lock()
+
+    def _fetch(item: tuple[str, Path, str, str]) -> tuple[str, bool]:
+        key, local_path, source, kind = item
+        ok = r2.download_to(key, local_path)
+        if ok and kind == "tar":
+            with tars_lock:
+                image_tars.append((source, local_path))
+        return kind, ok
+
+    if todo:
+        with ThreadPoolExecutor(max_workers=download_workers) as ex:
+            for kind, ok in (f.result() for f in as_completed(ex.submit(_fetch, it) for it in todo)):
+                if ok:
+                    n[kind] += 1
+
+    def _extract(task: tuple[str, Path]) -> int:
+        source, tar_path = task
         images_dir = local_root / source / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         try:
             with tarfile.open(tar_path, "r") as tar:
                 tar.extractall(images_dir)
-            n_images += len(list(images_dir.glob("*")))
         except Exception:  # pragma: no cover - corrupt tar; downstream skips records
-            continue
+            return 0
+        return len(list(images_dir.glob("*")))
+
+    # Extract each image tar into the source's images/ subdir so downstream
+    # code sees loose JPEGs just like the old layout.
+    if image_tars:
+        with ThreadPoolExecutor(max_workers=min(8, len(image_tars))) as ex:
+            for count in ex.map(_extract, image_tars):
+                n["loose"] += count
+
+    n_parquet = n["parquet"]
+    n_images = n["loose"]
+    n_state = n["state"]
+    n_tars = n["tar"]
 
     return {
         "parquet_shards": n_parquet,
