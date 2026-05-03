@@ -39,26 +39,27 @@ jobs:
           dv = '${{ inputs.data_version }}'
           stage = '${{ inputs.stage }}'
           prefix = f'vrm/{dv}/{stage}/'
-          keys = list(r2.list_prefix(prefix))
-          per_src = defaultdict(lambda: {'parquet': 0, 'tar': 0, 'state': 0, 'bytes': 0})
-          total_bytes = 0
-          for k in keys:
-              size = k.get('Size', 0)
-              total_bytes += size
-              key = k['Key']
+          keys = r2.list_prefix(prefix)
+          per_src = defaultdict(lambda: {'parquet': 0, 'tar': 0, 'state': 0, 'image': 0})
+          for key in keys:
               rel = key[len(prefix):]
               src = rel.split('/', 1)[0] if '/' in rel else rel
               if key.endswith('.parquet'): per_src[src]['parquet'] += 1
               elif key.endswith('-images.tar'): per_src[src]['tar'] += 1
               elif key.endswith('_state.json'): per_src[src]['state'] += 1
-              per_src[src]['bytes'] += size
+              else: per_src[src]['image'] += 1
           print(f'Prefix: {prefix}')
-          print(f'Total objects: {len(keys)}  Total size: {total_bytes/1e9:.2f} GB')
+          print(f'Total objects: {len(keys)}')
           print()
-          print(f'{\"source\":30s} {\"parquet\":>8s} {\"tar\":>5s} {\"state\":>5s} {\"size_mb\":>10s}')
+          print(f'{\"source\":30s} {\"parquet\":>8s} {\"tar\":>5s} {\"state\":>5s} {\"images\":>8s} {\"~records\":>8s}')
+          grand = 0
           for src in sorted(per_src):
               s = per_src[src]
-              print(f'{src:30s} {s[\"parquet\"]:>8d} {s[\"tar\"]:>5d} {s[\"state\"]:>5d} {s[\"bytes\"]/1e6:>10.1f}')
+              est = s['parquet'] * 500
+              grand += est
+              print(f'{src:30s} {s[\"parquet\"]:>8d} {s[\"tar\"]:>5d} {s[\"state\"]:>5d} {s[\"image\"]:>8d} {est:>8d}')
+          print()
+          print(f'Estimated records (full shards * 500): {grand}')
           " | tee /tmp/progress.txt
           {
             echo '## R2 progress: ${{ inputs.data_version }} / ${{ inputs.stage }}'
