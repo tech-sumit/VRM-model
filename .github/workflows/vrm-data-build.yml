@@ -13,6 +13,11 @@ on:
         required: true
         type: boolean
         default: true
+      debug_hold:
+        description: "Keep pod alive after task exits (SSH in to debug). Costs $0.06/hr until manually destroyed."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: vrm-data-${{ inputs.data_version }}
@@ -54,6 +59,7 @@ jobs:
           VRM_MAX_USD_DATAPREP: ${{ vars.VRM_MAX_USD_DATAPREP }}
           VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
           VRM_GIT_REF: ${{ github.sha }}
+          VRM_DEBUG_HOLD: ${{ inputs.debug_hold && '1' || '' }}
         id: launch
         run: |
           DISTILL_FLAG="--include-distillation"

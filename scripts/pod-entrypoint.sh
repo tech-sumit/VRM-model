@@ -3,10 +3,23 @@
 # This script is the SINGLE entrypoint baked into all three images. The
 # RunPod pod is started with VRM_TASK=<sft|grpo|rejection|eval|dataprep>
 # and per-task env vars (DATA_VERSION, RUN_NAME, CHECKPOINT, ...).
-set -euo pipefail
+#
+# Debug/hotfix: set VRM_DEBUG_HOLD=1 in the pod env to make the pod SSH-
+# accessible after the task exits (success or failure). Otherwise the pod
+# terminates normally so RunPod billing stops.
+set -uo pipefail   # NOTE: no -e so we can capture task exit code + hold the pod
 
 log() { echo "[$(date -Iseconds)] $*"; }
-trap 'log "FATAL: line $LINENO failed"; python -m vrm.infra.webhook failure "${VRM_TASK:-?}" "${RUN_NAME:-?}" "{\"reason\":\"trap line $LINENO\"}" || true; exit 1' ERR
+
+hold_pod_if_debug() {
+    local exit_code="$1"
+    if [[ "${VRM_DEBUG_HOLD:-0}" == "1" ]]; then
+        log "VRM_DEBUG_HOLD=1 -- sleeping forever (exit was $exit_code). SSH in to debug."
+        # Keep sshd alive by not exiting. 'wait' on sshd child.
+        wait
+    fi
+    exit "$exit_code"
+}
 
 : "${VRM_TASK:?VRM_TASK env var is required (sft|grpo|rejection|eval|dataprep)}"
 : "${RUN_NAME:?RUN_NAME env var is required}"
@@ -44,25 +57,29 @@ trap 'kill $BUDGET_PID 2>/dev/null || true' EXIT
 log "Pod entrypoint: VRM_TASK=$VRM_TASK RUN_NAME=$RUN_NAME"
 python -m vrm.infra.webhook started "$VRM_TASK" "$RUN_NAME"
 
+task_rc=0
 case "$VRM_TASK" in
     sft|rejection)
-        exec python -m vrm.train.stage1_sft \
+        python -m vrm.train.stage1_sft \
             --config "${VRM_CONFIG:?}" \
             --data-version "${DATA_VERSION:?}" \
-            --run-name "$RUN_NAME"
+            --run-name "$RUN_NAME" 2>&1 | tee /tmp/vrm-task.log
+        task_rc=${PIPESTATUS[0]}
         ;;
     grpo)
-        exec python -m vrm.train.stage2_grpo \
+        python -m vrm.train.stage2_grpo \
             --config "${VRM_CONFIG:?}" \
             --sft-checkpoint "${SFT_CHECKPOINT:?}" \
             --data-version "${DATA_VERSION:?}" \
-            --run-name "$RUN_NAME"
+            --run-name "$RUN_NAME" 2>&1 | tee /tmp/vrm-task.log
+        task_rc=${PIPESTATUS[0]}
         ;;
     eval)
-        exec python -m vrm.eval.run_vlmevalkit \
+        python -m vrm.eval.run_vlmevalkit \
             --checkpoint "${CHECKPOINT:?}" \
             --suite "${SUITE:?}" \
-            --run-name "$RUN_NAME"
+            --run-name "$RUN_NAME" 2>&1 | tee /tmp/vrm-task.log
+        task_rc=${PIPESTATUS[0]}
         ;;
     dataprep)
         # VRM_CONFIG may be a comma-separated list of recipe YAML paths.
@@ -73,13 +90,26 @@ case "$VRM_TASK" in
         if [[ "${VRM_INCLUDE_DISTILLATION:-true}" == "false" ]]; then
             _DISTILL_FLAG="--no-distillation"
         fi
-        exec python -m vrm.data.build \
+        python -m vrm.data.build \
             "${_RECIPE_ARGS[@]}" \
             --data-version "${DATA_VERSION:?}" \
-            "$_DISTILL_FLAG"
+            "$_DISTILL_FLAG" 2>&1 | tee /tmp/vrm-task.log
+        task_rc=${PIPESTATUS[0]}
         ;;
     *)
         log "Unknown VRM_TASK=$VRM_TASK"
-        exit 2
+        hold_pod_if_debug 2
         ;;
 esac
+
+if [[ $task_rc -ne 0 ]]; then
+    log "task exited with code $task_rc"
+    tail -c 2000 /tmp/vrm-task.log 2>/dev/null > /tmp/vrm-tail.log || true
+    python -m vrm.infra.webhook failure "$VRM_TASK" "$RUN_NAME" \
+        "{\"exit_code\":$task_rc,\"tail\":$(python -c 'import json,sys; print(json.dumps(open("/tmp/vrm-tail.log").read() if __import__("os").path.exists("/tmp/vrm-tail.log") else ""))')}" || true
+else
+    log "task completed successfully"
+    python -m vrm.infra.webhook completed "$VRM_TASK" "$RUN_NAME" || true
+fi
+
+hold_pod_if_debug "$task_rc"

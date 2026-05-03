@@ -159,6 +159,7 @@ def _common_env() -> dict[str, str]:
         "GH_TOKEN_FOR_DISPATCH",
         "VRM_GIT_REPO",
         "VRM_GIT_REF",
+        "VRM_DEBUG_HOLD",  # when "1", pod stays alive after task exits (SSH in to debug)
     ]
     return {k: os.environ[k] for k in keys if os.environ.get(k)}
 
