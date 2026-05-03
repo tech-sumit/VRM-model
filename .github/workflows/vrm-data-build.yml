@@ -47,6 +47,14 @@ jobs:
           HF_ORG: ${{ vars.HF_ORG }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VRM_DISTILL_BULK_MODEL: ${{ vars.VRM_DISTILL_BULK_MODEL }}
+          VRM_DISTILL_REFINE_MODEL: ${{ vars.VRM_DISTILL_REFINE_MODEL }}
+          VRM_DISTILL_MAX_USD: ${{ vars.VRM_DISTILL_MAX_USD }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WANDB_PROJECT: ${{ vars.WANDB_PROJECT }}
           WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}

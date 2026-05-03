@@ -25,14 +25,22 @@ import click
 from vrm.data.distill import distill_shards
 from vrm.data.filter import filter_shards
 from vrm.data.normalize import REGISTRY
-from vrm.data.normalize._driver import normalize_dataset
+from vrm.data.normalize._driver import DEFAULT_SHARD_SIZE, normalize_dataset
 from vrm.data.recipe import Recipe, load_recipe
 from vrm.data.schema import Record
 from vrm.infra.hf_hub import dataset_repo_id, upload_dataset_shards
+from vrm.infra.r2 import R2Client, get_client
 from vrm.infra.webhook import post_status
 
 
-def _normalize_one_source(source: str, cap: int, *, out_dir: Path) -> dict[str, int]:
+def _normalize_one_source(
+    source: str,
+    cap: int,
+    *,
+    out_dir: Path,
+    r2: R2Client | None,
+    data_version: str,
+) -> dict[str, int]:
     from datasets import load_dataset
 
     spec = REGISTRY[source]
@@ -46,13 +54,49 @@ def _normalize_one_source(source: str, cap: int, *, out_dir: Path) -> dict[str, 
         load_kwargs["data_files"] = spec.data_files
     ds = load_dataset(spec.hf_id, **load_kwargs)
     n = min(cap, len(ds))
-    ds = ds.select(range(n))
-    return normalize_dataset(
+
+    # Resume support: if R2 already has shards for this (data_version,
+    # source), skip the raw rows we've already normalized.
+    start_row = 0
+    start_shard_idx = 0
+    if r2 is not None:
+        state = r2.read_state(data_version, "normalized", source)
+        if state.get("done"):
+            # Fully done -- nothing to do this run.
+            return {
+                "records_in": int(state.get("records_in", 0)),
+                "records_out": int(state.get("records_out", 0)),
+                "shards": int(state.get("shards_written", 0)),
+                "final_shard_idx": int(state.get("shards_written", 0)),
+                "resumed": "skipped",
+            }
+        start_row = int(state.get("last_row_index", 0))
+        start_shard_idx = int(state.get("shards_written", 0))
+        if start_row >= n:
+            return {
+                "records_in": int(state.get("records_in", 0)),
+                "records_out": int(state.get("records_out", 0)),
+                "shards": int(state.get("shards_written", 0)),
+                "final_shard_idx": int(state.get("shards_written", 0)),
+                "resumed": "already-covered-cap",
+            }
+
+    ds = ds.select(range(start_row, n))
+    result = normalize_dataset(
         (dict(r) for r in ds),
         source=source,
         out_dir=out_dir,
-        shard_size=5000,
+        shard_size=DEFAULT_SHARD_SIZE,
+        r2=r2,
+        data_version=data_version,
+        stage="normalized",
+        start_shard_idx=start_shard_idx,
+        start_row_offset=start_row,
+        total_rows_hint=n,
     )
+    if start_row:
+        result["resumed"] = f"from_row={start_row}"
+    return result
 
 
 def _difficulty_provider_factory(model_id: str, k: int):
@@ -94,13 +138,21 @@ def build_one_recipe(
     norm_dir = work_dir / "normalized"
     filt_dir = work_dir / "filtered"
     distill_dir = work_dir / "distilled"
+    r2 = get_client()
+    if r2 is None:
+        click.echo(
+            "[build] WARNING: R2_* env vars not set -- running WITHOUT durable "
+            "checkpointing. A pod crash will lose all progress.",
+            err=True,
+        )
 
     n_in = 0
     n_out = 0
     for sc in recipe.sources:
         out = norm_dir / sc.source
         out.mkdir(parents=True, exist_ok=True)
-        result = _normalize_one_source(sc.source, sc.cap, out_dir=out)
+        result = _normalize_one_source(sc.source, sc.cap, out_dir=out, r2=r2, data_version=data_version)
+        click.echo(f"[build] normalized {sc.source}: {result}")
         n_in += result["records_in"]
         n_out += result["records_out"]
 
