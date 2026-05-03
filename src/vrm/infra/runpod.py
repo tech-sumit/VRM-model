@@ -169,6 +169,7 @@ def _make_spec(
     gpu_type: str | None,
     gpu_count: int,
     env: dict[str, str],
+    container_disk_in_gb: int = 200,
 ) -> PodSpec:
     return PodSpec(
         name=name,
@@ -178,6 +179,7 @@ def _make_spec(
         volume_id=os.environ.get("VRM_NETWORK_VOLUME_ID"),
         env=env,
         region=os.environ.get("VRM_REGION"),
+        container_disk_in_gb=container_disk_in_gb,
     )
 
 
@@ -266,6 +268,10 @@ def launch_dataprep(recipes: tuple[str, ...], data_version: str, include_distill
         gpu_type=None,
         gpu_count=0,
         env=env,
+        # RunPod CPU pods cap container disk at 20-30 GB depending on flavor.
+        # Raw shards land on the network volume, so the container disk only
+        # needs to hold the image + working intermediates.
+        container_disk_in_gb=20,
     )
     with RunPodClient() as c:
         pod_id = c.create_pod(spec)
