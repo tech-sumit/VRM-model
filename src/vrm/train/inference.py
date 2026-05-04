@@ -7,6 +7,7 @@ won't crash on import.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from vrm.data.schema import Record
 
@@ -74,17 +75,18 @@ def _patch_vllm_rope_scaling_check() -> None:
     _vcfg.patch_rope_scaling_dict = _lenient
 
 
-def generate_responses(
-    records: Sequence[Record],
-    *,
-    model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
-    n_per_prompt: int = 8,
-    temperature: float = 1.0,
-    max_tokens: int = 8192,
-) -> list[list[str]]:
-    """Returns one inner list of n_per_prompt strings per record."""
+# Module-level singleton: vLLM model load + KV cache profiling costs ~60s
+# and 15.6 GiB VRAM. The difficulty filter calls generate_responses once per
+# record, so rebuilding the engine every call would be catastrophic (and
+# was the root cause of the "silent restart" behavior we were debugging).
+_LLM_CACHE: dict[str, Any] = {}
+
+
+def _get_llm(model_id: str) -> Any:
+    if model_id in _LLM_CACHE:
+        return _LLM_CACHE[model_id]
     _patch_vllm_rope_scaling_check()
-    from vllm import LLM, SamplingParams
+    from vllm import LLM
 
     # enforce_eager=True disables torch.compile + cudagraph capture, which
     # have proven fragile on Qwen2.5-VL in vLLM 0.8.5 (engine core crashes
@@ -105,6 +107,22 @@ def generate_responses(
         max_model_len=32768,
         gpu_memory_utilization=0.85,
     )
+    _LLM_CACHE[model_id] = llm
+    return llm
+
+
+def generate_responses(
+    records: Sequence[Record],
+    *,
+    model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    n_per_prompt: int = 8,
+    temperature: float = 1.0,
+    max_tokens: int = 8192,
+) -> list[list[str]]:
+    """Returns one inner list of n_per_prompt strings per record."""
+    from vllm import SamplingParams
+
+    llm = _get_llm(model_id)
     sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
     prompts = []
     for r in records:
