@@ -323,6 +323,10 @@ def launch_dataprep(
         # which would prematurely kill CPU pods at ~15h wall-time.
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
+        # Force vLLM V0 engine: V1 crashes silently during engine_core init
+        # on Qwen2.5-VL in vLLM 0.8.5 (no stderr, just exits). V0 runs
+        # in-process so failures are visible.
+        "VLLM_USE_V1": "0",
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",
