@@ -10,6 +10,10 @@ from collections.abc import Sequence
 
 from vrm.data.schema import Record
 
+# LLM is configured with limit_mm_per_prompt={"image": 1}; records with more
+# images are truncated to the first N below.
+MAX_IMAGES_PER_PROMPT = 1
+
 
 def _to_chat_template(rec: Record) -> str:
     """Qwen2.5-VL chat template.
@@ -20,7 +24,8 @@ def _to_chat_template(rec: Record) -> str:
     fails with 'Expected N prompt updates corresponding to N image items'
     when the placeholders are missing.
     """
-    image_prefix = "<|vision_start|><|image_pad|><|vision_end|>" * len(rec.images)
+    n_images = min(len(rec.images), MAX_IMAGES_PER_PROMPT)
+    image_prefix = "<|vision_start|><|image_pad|><|vision_end|>" * n_images
     parts = []
     first_user_patched = False
     for m in rec.messages:
@@ -84,24 +89,29 @@ def generate_responses(
     # enforce_eager=True disables torch.compile + cudagraph capture, which
     # have proven fragile on Qwen2.5-VL in vLLM 0.8.5 (engine core crashes
     # silently during inductor compile). Filter pass@K is IO-bound anyway.
-    # max_model_len is capped to keep KV cache reasonable (Qwen2.5-VL's
-    # default 128K context blows up profiling on a single H200).
+    # max_model_len must fit worst-case multimodal embeddings: Qwen2.5-VL
+    # reserves up to ~16K tokens per image (65K for 4 images). Cap to
+    # limit_mm_per_prompt={"image": 1} so single-image prompts -- the vast
+    # majority of the corpus -- profile cleanly; records with more images
+    # will be truncated by vLLM, which is acceptable for a difficulty-only
+    # pass. mm_processor_kwargs caps per-image tokens to keep prefill sane.
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
         dtype="bfloat16",
-        limit_mm_per_prompt={"image": 4},
+        limit_mm_per_prompt={"image": 1},
+        mm_processor_kwargs={"min_pixels": 28 * 28, "max_pixels": 1280 * 28 * 28},
         enforce_eager=True,
-        max_model_len=16384,
+        max_model_len=32768,
         gpu_memory_utilization=0.85,
     )
     sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
-    prompts = [
-        {
-            "prompt": _to_chat_template(r),
-            "multi_modal_data": {"image": _load_images(r.images)},
-        }
-        for r in records
-    ]
+    prompts = []
+    for r in records:
+        imgs = _load_images(r.images[:MAX_IMAGES_PER_PROMPT])
+        entry: dict = {"prompt": _to_chat_template(r)}
+        if imgs:
+            entry["multi_modal_data"] = {"image": imgs}
+        prompts.append(entry)
     outputs = llm.generate(prompts, sp)
     return [[o.text for o in out.outputs] for out in outputs]
