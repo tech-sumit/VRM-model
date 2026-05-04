@@ -27,26 +27,36 @@ def _load_images(paths: list[str]) -> list:
     return [Image.open(p).convert("RGB") for p in paths]
 
 
-def _qwen25vl_rope_override(model_id: str) -> dict | None:
-    """Qwen2.5-VL's hub config ships both legacy `type=mrope` and modern
-    `rope_type=default` keys in `rope_scaling`; vLLM 0.8+ refuses the conflict.
-    Drop the legacy key and pass the cleaned dict via `hf_overrides`.
+def _patch_vllm_rope_scaling_check() -> None:
+    """Neutralize vLLM 0.8.x's strict `rope_scaling` conflict check.
+
+    Qwen2.5-VL ships a hub config with both legacy `type=mrope` and modern
+    `rope_type=default` in `rope_scaling`. vLLM's `patch_rope_scaling_dict`
+    hard-raises on the conflict *inside* `get_config`, before any
+    `hf_overrides` are consulted. The legacy `type` is informational; dropping
+    it is the upstream-recommended fix. We monkey-patch the check to strip the
+    conflicting key rather than raise.
     """
     try:
-        from transformers import AutoConfig
+        from vllm.transformers_utils import config as _vcfg
     except Exception:
-        return None
-    try:
-        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
-    except Exception:
-        return None
-    rope = getattr(cfg, "rope_scaling", None)
-    if not isinstance(rope, dict):
-        return None
-    if "type" in rope and "rope_type" in rope:
-        cleaned = {k: v for k, v in rope.items() if k != "type"}
-        return {"rope_scaling": cleaned}
-    return None
+        return
+    original = getattr(_vcfg, "patch_rope_scaling_dict", None)
+    if original is None or getattr(original, "_vrm_patched", False):
+        return
+
+    def _lenient(rope_scaling: dict) -> None:
+        if (
+            isinstance(rope_scaling, dict)
+            and "rope_type" in rope_scaling
+            and "type" in rope_scaling
+        ):
+            rope_scaling.pop("type", None)
+        # Delegate to the original implementation for any remaining normalization.
+        original(rope_scaling)
+
+    _lenient._vrm_patched = True  # type: ignore[attr-defined]
+    _vcfg.patch_rope_scaling_dict = _lenient
 
 
 def generate_responses(
@@ -58,18 +68,15 @@ def generate_responses(
     max_tokens: int = 8192,
 ) -> list[list[str]]:
     """Returns one inner list of n_per_prompt strings per record."""
+    _patch_vllm_rope_scaling_check()
     from vllm import LLM, SamplingParams
 
-    llm_kwargs: dict = {
-        "model": model_id,
-        "tensor_parallel_size": 1,
-        "dtype": "bfloat16",
-        "limit_mm_per_prompt": {"image": 4},
-    }
-    overrides = _qwen25vl_rope_override(model_id)
-    if overrides:
-        llm_kwargs["hf_overrides"] = overrides
-    llm = LLM(**llm_kwargs)
+    llm = LLM(
+        model=model_id,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        limit_mm_per_prompt={"image": 4},
+    )
     sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
     prompts = [
         {
