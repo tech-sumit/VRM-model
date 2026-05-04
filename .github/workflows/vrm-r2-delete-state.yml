@@ -1,0 +1,46 @@
+name: vrm-r2-delete-state
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_version:
+        default: "v1"
+        type: string
+      stage:
+        description: "normalized | filtered | distilled"
+        required: true
+        type: string
+      source:
+        description: "source name OR 'all' (for filter/distill aggregate)"
+        required: true
+        type: string
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with: { version: "0.10.4" }
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Delete state
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          uv run python -c "
+          from vrm.infra.r2 import R2Client, R2Config
+          r2 = R2Client(R2Config.from_env())
+          key = f'vrm/${{ inputs.data_version }}/${{ inputs.stage }}/${{ inputs.source }}/_state.json'
+          before = r2.get_bytes(key)
+          print(f'Before: {before!r}')
+          if before is not None:
+              r2._client.delete_object(Bucket=r2.cfg.bucket, Key=key)
+              print(f'Deleted {key}')
+          else:
+              print(f'Key not present: {key}')
+          "

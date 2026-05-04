@@ -58,7 +58,10 @@ def filter_shards(
     shard_idx = len(existing)
     if r2 is not None and data_version is not None:
         state = r2.read_state(data_version, "filtered", "all")
-        if state.get("done"):
+        # Treat `done=true` with records_in=0 as a corrupt checkpoint from an
+        # aborted earlier run (e.g. started before normalized data was on disk)
+        # -- otherwise the stage would skip forever on subsequent pods.
+        if state.get("done") and int(state.get("records_in", 0)) > 0:
             return {
                 "records_in": float(state.get("records_in", 0)),
                 "records_out": float(state.get("records_out", 0)),
@@ -111,7 +114,10 @@ def filter_shards(
                 _flush()
     _flush()
 
-    if r2 is not None and data_version is not None:
+    # Only write the terminal "done" marker when we actually processed input.
+    # An empty run usually means normalized data wasn't on disk yet -- we want
+    # the next pod to retry rather than short-circuit.
+    if r2 is not None and data_version is not None and in_count > 0:
         with contextlib.suppress(Exception):
             r2.write_state(
                 data_version,
