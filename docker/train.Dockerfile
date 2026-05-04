@@ -37,11 +37,11 @@ RUN git clone --depth 1 --branch ${LLAMAFACTORY_REF} https://github.com/hiyouga/
     && uv pip install --system --no-deps -e /opt/LLaMA-Factory \
     && uv pip install --system "transformers>=4.45" "datasets>=2.20" "peft>=0.12" "trl>=0.11" "deepspeed>=0.15"
 
-# --- Layer: flash-attn (slow build, isolated) ---
-RUN MAX_JOBS=4 uv pip install --system --no-build-isolation flash-attn==2.6.3
+# --- Layer: flash-attn (slow build, isolated; torch 2.5 compatible) ---
+RUN MAX_JOBS=4 uv pip install --system --no-build-isolation flash-attn==2.7.4.post1
 
-# --- Layer: vLLM (rollout server for GRPO) ---
-RUN uv pip install --system "vllm>=0.6.2"
+# --- Layer: vLLM (rollout server for GRPO; Qwen2.5-VL requires >=0.7.3) ---
+RUN uv pip install --system "vllm>=0.8.5"
 
 # --- Default workdir + entrypoint ---
 WORKDIR /workspace/vrm
