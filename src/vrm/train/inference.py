@@ -12,11 +12,25 @@ from vrm.data.schema import Record
 
 
 def _to_chat_template(rec: Record) -> str:
+    """Qwen2.5-VL chat template.
+
+    The processor expects one `<|vision_start|><|image_pad|><|vision_end|>`
+    block per image, placed inside the user turn before the text. vLLM
+    replaces each `<|image_pad|>` with the real image feature tokens and
+    fails with 'Expected N prompt updates corresponding to N image items'
+    when the placeholders are missing.
+    """
+    image_prefix = "<|vision_start|><|image_pad|><|vision_end|>" * len(rec.images)
     parts = []
+    first_user_patched = False
     for m in rec.messages:
         if m.role == "assistant":
             continue
-        parts.append(f"<|im_start|>{m.role}\n{m.content}<|im_end|>")
+        content = m.content
+        if not first_user_patched and m.role == "user" and image_prefix:
+            content = image_prefix + content
+            first_user_patched = True
+        parts.append(f"<|im_start|>{m.role}\n{content}<|im_end|>")
     parts.append("<|im_start|>assistant\n")
     return "\n".join(parts)
 
