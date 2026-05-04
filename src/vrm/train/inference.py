@@ -71,11 +71,19 @@ def generate_responses(
     _patch_vllm_rope_scaling_check()
     from vllm import LLM, SamplingParams
 
+    # enforce_eager=True disables torch.compile + cudagraph capture, which
+    # have proven fragile on Qwen2.5-VL in vLLM 0.8.5 (engine core crashes
+    # silently during inductor compile). Filter pass@K is IO-bound anyway.
+    # max_model_len is capped to keep KV cache reasonable (Qwen2.5-VL's
+    # default 128K context blows up profiling on a single H200).
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
         dtype="bfloat16",
         limit_mm_per_prompt={"image": 4},
+        enforce_eager=True,
+        max_model_len=16384,
+        gpu_memory_utilization=0.85,
     )
     sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
     prompts = [
