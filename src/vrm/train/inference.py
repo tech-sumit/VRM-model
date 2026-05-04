@@ -46,11 +46,7 @@ def _patch_vllm_rope_scaling_check() -> None:
         return
 
     def _lenient(rope_scaling: dict) -> None:
-        if (
-            isinstance(rope_scaling, dict)
-            and "rope_type" in rope_scaling
-            and "type" in rope_scaling
-        ):
+        if isinstance(rope_scaling, dict) and "rope_type" in rope_scaling and "type" in rope_scaling:
             rope_scaling.pop("type", None)
         # Delegate to the original implementation for any remaining normalization.
         original(rope_scaling)
