@@ -323,10 +323,10 @@ def launch_dataprep(
         # which would prematurely kill CPU pods at ~15h wall-time.
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
-        # Force vLLM V0 engine: V1 crashes silently during engine_core init
-        # on Qwen2.5-VL in vLLM 0.8.5 (no stderr, just exits). V0 runs
-        # in-process so failures are visible.
-        "VLLM_USE_V1": "0",
+        # vLLM V1 for Qwen2.5-VL: V0's memory-profiling step SIGKILLs the
+        # worker silently (no stderr) with limit_mm_per_prompt=1, while V1
+        # completes profile + KV cache alloc in ~6s. Verified on A100-SXM.
+        "VLLM_USE_V1": "1",
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",
@@ -369,7 +369,7 @@ def launch_debug(gpu_type: str | None, gpu_count: int, image_kind: str, name: st
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
         "VRM_DEBUG_HOLD": "1",
-        "VLLM_USE_V1": "0",
+        "VLLM_USE_V1": "1",
     }
     spec = _make_spec(
         name=name,
