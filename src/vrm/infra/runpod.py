@@ -299,6 +299,10 @@ def launch_dataprep(
     else:
         gpu_type = None
         gpu_count = 0
+    # Setting VRM_SKIP_VOLUME=1 detaches the network volume, freeing the
+    # scheduler to place the pod in any DC with capacity (volume is DC-pinned).
+    # Safe for filter + distill: both re-download inputs from R2 on start.
+    skip_volume = os.environ.get("VRM_SKIP_VOLUME", "0") == "1"
     env = _common_env() | {
         # VRM_TASK maps to the pod-entrypoint switch; "dataprep" runs
         # python -m vrm.data.build --stage $VRM_STAGE so all three stages
@@ -325,7 +329,7 @@ def launch_dataprep(
         # CPU pods on RunPod cap container disk at 20-30 GB; GPU pods get more.
         container_disk_in_gb=200 if needs_gpu else 20,
         # Filter needs GPU-bound DC; normalize/distill are DC-agnostic (CPU).
-        attach_volume=needs_gpu,
+        attach_volume=needs_gpu and not skip_volume,
     )
     with RunPodClient() as c:
         pod_id = c.create_pod(spec)

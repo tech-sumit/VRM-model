@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: ""
+      skip_volume:
+        description: "Detach network volume (frees scheduler to any DC with capacity). Filter+distill re-download from R2 anyway."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: vrm-data-${{ inputs.data_version }}-${{ inputs.stage }}
@@ -86,6 +91,7 @@ jobs:
           VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
           VRM_GIT_REF: ${{ github.sha }}
           VRM_DEBUG_HOLD: ${{ inputs.debug_hold && '1' || '' }}
+          VRM_SKIP_VOLUME: ${{ inputs.skip_volume && '1' || '0' }}
         id: launch
         run: |
           DISTILL_FLAG="--include-distillation"
