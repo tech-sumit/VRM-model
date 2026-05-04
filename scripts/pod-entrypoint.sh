@@ -15,8 +15,11 @@ hold_pod_if_debug() {
     local exit_code="$1"
     if [[ "${VRM_DEBUG_HOLD:-0}" == "1" ]]; then
         log "VRM_DEBUG_HOLD=1 -- sleeping forever (exit was $exit_code). SSH in to debug."
-        # Keep sshd alive by not exiting. 'wait' on sshd child.
-        wait
+        # `wait` returns as soon as ANY child (sshd, budget daemon, or any
+        # setsid-launched hotfix process) exits, which terminates the
+        # container and lets RunPod reclaim the pod. Use sleep loop instead
+        # so the entrypoint script stays blocked regardless of child state.
+        while true; do sleep 3600; done
     fi
     exit "$exit_code"
 }
