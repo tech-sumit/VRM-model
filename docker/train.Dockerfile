@@ -12,10 +12,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WANDB_DIR=/workspace/wandb \
     TORCH_CUDA_ARCH_LIST="8.0;9.0"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3.11-dev python3-pip \
-        build-essential git curl ca-certificates openssh-client openssh-server \
-        ninja-build libaio-dev pkg-config jq tini \
+# Retry apt fetches: Ubuntu mirrors intermittently serve partial Packages.gz
+# during sync windows, which causes "File has unexpected size" errors.
+RUN for i in 1 2 3 4 5; do \
+        apt-get update && apt-get install -y --no-install-recommends \
+            python3.11 python3.11-venv python3.11-dev python3-pip \
+            build-essential git curl ca-certificates openssh-client openssh-server \
+            ninja-build libaio-dev pkg-config jq tini \
+        && break || { echo "apt retry $i/5"; sleep 30; }; \
+    done \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* \
     && sed -ri 's/^#?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
