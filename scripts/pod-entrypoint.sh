@@ -69,6 +69,13 @@ python -m vrm.infra.webhook started "$VRM_TASK" "$RUN_NAME"
 
 task_rc=0
 case "$VRM_TASK" in
+    debug)
+        # Persistent dev pod: skip all workload, just idle with sshd up so we
+        # can iterate on code + run modules interactively without paying for
+        # fresh CI builds + pod provisioning on every change.
+        log "VRM_TASK=debug -- idling forever for interactive SSH use"
+        while true; do sleep 3600; done
+        ;;
     sft|rejection)
         python -m vrm.train.stage1_sft \
             --config "${VRM_CONFIG:?}" \

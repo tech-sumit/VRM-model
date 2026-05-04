@@ -1,0 +1,105 @@
+name: vrm-pod-debug
+
+# Launch an idle RunPod pod (VRM_TASK=debug) for interactive SSH iteration.
+# The pod pulls the repo, installs vrm, starts sshd, sleeps forever. Use it
+# to run filter/distill/inference modules by hand without rebuilding images.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_kind:
+        description: "Which baked image to boot: train (has vLLM), dataprep, eval"
+        required: true
+        type: choice
+        options:
+          - train
+          - dataprep
+          - eval
+        default: train
+      gpu_type:
+        description: "GPU type (blank for CPU-only). Examples: 'NVIDIA A100-SXM4-80GB', 'NVIDIA H100 80GB HBM3', 'NVIDIA H200'"
+        required: false
+        type: string
+        default: "NVIDIA A100-SXM4-80GB"
+      gpu_count:
+        description: "GPU count (0 for CPU-only)"
+        required: false
+        type: string
+        default: "1"
+      cloud_type:
+        description: "SECURE or COMMUNITY"
+        required: true
+        type: choice
+        options:
+          - SECURE
+          - COMMUNITY
+        default: COMMUNITY
+      name:
+        description: "Pod name tag"
+        required: false
+        type: string
+        default: "vrm-debug"
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.4"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+
+      - name: Launch debug pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ORG: ${{ vars.HF_ORG }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VRM_DISTILL_BULK_MODEL: ${{ vars.VRM_DISTILL_BULK_MODEL }}
+          VRM_DISTILL_REFINE_MODEL: ${{ vars.VRM_DISTILL_REFINE_MODEL }}
+          VRM_DISTILL_MAX_USD: ${{ vars.VRM_DISTILL_MAX_USD }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: ${{ vars.WANDB_PROJECT }}
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          SLACK_WEBHOOK_VRM: ${{ secrets.SLACK_WEBHOOK_VRM }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN_FOR_DISPATCH: ${{ secrets.GH_TOKEN_FOR_DISPATCH }}
+          VRM_DATAPREP_IMAGE: ${{ vars.VRM_DATAPREP_IMAGE }}
+          VRM_TRAIN_IMAGE: ${{ vars.VRM_TRAIN_IMAGE }}
+          VRM_EVAL_IMAGE: ${{ vars.VRM_EVAL_IMAGE }}
+          VRM_GIT_REPO: https://github.com/${{ github.repository }}.git
+          VRM_GIT_REF: ${{ github.sha }}
+          VRM_CLOUD_TYPE: ${{ inputs.cloud_type }}
+        id: launch
+        run: |
+          GPU_FLAG=""
+          if [[ -n "${{ inputs.gpu_type }}" ]]; then
+            GPU_FLAG="--gpu-type '${{ inputs.gpu_type }}' --gpu-count ${{ inputs.gpu_count }}"
+          fi
+          POD_ID=$(eval uv run vrm runpod launch-debug \
+              --image-kind '${{ inputs.image_kind }}' \
+              --name '${{ inputs.name }}' \
+              $GPU_FLAG)
+          echo "pod_id=$POD_ID" >> $GITHUB_OUTPUT
+          echo "Launched debug pod $POD_ID"
+
+      - name: Summary
+        run: |
+          echo "### Debug pod launched" >> $GITHUB_STEP_SUMMARY
+          echo "- pod_id: \`${{ steps.launch.outputs.pod_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- image: \`${{ inputs.image_kind }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- gpu: \`${{ inputs.gpu_type }} x${{ inputs.gpu_count }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- cloud: \`${{ inputs.cloud_type }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Wait ~2 min for provisioning, then use \`vrm-pod-status.yml\` to get SSH host/port." >> $GITHUB_STEP_SUMMARY

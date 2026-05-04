@@ -344,6 +344,47 @@ def launch_dataprep(
     click.echo(pod_id)
 
 
+@cli.command("launch-debug")
+@click.option("--gpu-type", default=None, help="GPU type (omit for CPU pod)")
+@click.option("--gpu-count", default=0, type=int)
+@click.option("--image-kind", type=click.Choice(["train", "dataprep", "eval"]), default="train")
+@click.option("--name", default="vrm-debug", help="Pod name tag")
+def launch_debug(gpu_type: str | None, gpu_count: int, image_kind: str, name: str) -> None:
+    """Launch an idle pod (VRM_TASK=debug) for interactive SSH-based iteration.
+
+    The pod pulls the repo, installs vrm, starts sshd, and sleeps forever.
+    Use it to exec modules by hand (filter, distill, inference) without
+    rebuilding images + provisioning fresh pods on every change.
+    """
+    image_map = {
+        "train": ("VRM_TRAIN_IMAGE", "ghcr.io/tech-sumit/vrm-train:latest"),
+        "dataprep": ("VRM_DATAPREP_IMAGE", "ghcr.io/tech-sumit/vrm-dataprep:latest"),
+        "eval": ("VRM_EVAL_IMAGE", "ghcr.io/tech-sumit/vrm-eval:latest"),
+    }
+    image_env, default_image = image_map[image_kind]
+    env = _common_env() | {
+        "VRM_TASK": "debug",
+        "RUN_NAME": name,
+        "VRM_MAX_USD": os.environ.get("VRM_MAX_USD_DEBUG", "200"),
+        "VRM_GPU_TYPE": gpu_type or "CPU",
+        "VRM_GPU_COUNT": str(gpu_count),
+        "VRM_DEBUG_HOLD": "1",
+        "VLLM_USE_V1": "0",
+    }
+    spec = _make_spec(
+        name=name,
+        image=os.environ.get(image_env, default_image),
+        gpu_type=gpu_type,
+        gpu_count=gpu_count,
+        env=env,
+        container_disk_in_gb=200 if gpu_count > 0 else 40,
+        attach_volume=False,
+    )
+    with RunPodClient() as c:
+        pod_id = c.create_pod(spec)
+    click.echo(pod_id)
+
+
 @cli.command("destroy")
 @click.argument("pod_id")
 def destroy(pod_id: str) -> None:
