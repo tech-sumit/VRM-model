@@ -18,6 +18,7 @@ This is the single entry the dataprep pod calls; pod-entrypoint.sh wires
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -179,22 +180,47 @@ def _run_filter(
 
     norm_flat = norm_dir.parent / "normalized_flat"
     norm_flat.mkdir(parents=True, exist_ok=True)
+    # Symlink every source's images into a single flat dir so that record
+    # paths of the form "images/<src>-<idx>-<i>.jpg" resolve when filter runs
+    # with cwd=norm_flat. Image filenames already carry the source prefix, so
+    # collisions across sources are impossible.
+    flat_images = norm_flat / "images"
+    flat_images.mkdir(parents=True, exist_ok=True)
     for src_dir in sorted(p for p in norm_dir.iterdir() if p.is_dir()):
         for shard in sorted(src_dir.glob("shard-*.parquet")):
             dst = norm_flat / f"{src_dir.name}-{shard.name}"
             if not dst.exists():
                 dst.write_bytes(shard.read_bytes())
+        src_images = src_dir / "images"
+        if src_images.is_dir():
+            for img in src_images.iterdir():
+                link = flat_images / img.name
+                if not link.exists():
+                    try:
+                        link.symlink_to(img.resolve())
+                    except OSError:
+                        # Symlink not permitted on some filesystems: hardlink,
+                        # then copy as final fallback.
+                        try:
+                            os.link(img, link)
+                        except OSError:
+                            link.write_bytes(img.read_bytes())
 
     provider = _difficulty_provider_factory(base_model_id, pass_k)
-    return filter_shards(
-        norm_flat,
-        filt_dir,
-        difficulty_provider=provider,
-        lo=recipe.difficulty_lo,
-        hi=recipe.difficulty_hi,
-        r2=r2,
-        data_version=data_version,
-    )
+    prev_cwd = os.getcwd()
+    os.chdir(norm_flat)
+    try:
+        return filter_shards(
+            norm_flat,
+            filt_dir,
+            difficulty_provider=provider,
+            lo=recipe.difficulty_lo,
+            hi=recipe.difficulty_hi,
+            r2=r2,
+            data_version=data_version,
+        )
+    finally:
+        os.chdir(prev_cwd)
 
 
 def _run_distill(
