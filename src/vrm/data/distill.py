@@ -389,7 +389,8 @@ async def distill_shards(
         buf: list[dict] = []
         paused = False
 
-        for shard_path in sorted(in_dir.glob("shard-*.parquet")):
+        # _run_distill renames flattened inputs, so match any .parquet.
+        for shard_path in sorted(in_dir.glob("*.parquet")):
             if counter.paused:
                 paused = True
                 break

@@ -99,7 +99,9 @@ def filter_shards(
         shard_idx += 1
         buf = []
 
-    for shard_path in sorted(in_dir.glob("shard-*.parquet")):
+    # _run_filter renames flattened inputs to "{source}-shard-*.parquet", so
+    # match any .parquet in the input dir rather than pinning to "shard-*".
+    for shard_path in sorted(in_dir.glob("*.parquet")):
         table = pq.read_table(shard_path)
         for row in table.to_pylist():
             in_count += 1
