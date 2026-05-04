@@ -38,6 +38,14 @@ on:
         required: false
         type: boolean
         default: false
+      cloud_type:
+        description: "RunPod cloud type: SECURE (pinned DCs) or COMMUNITY (wider capacity, cheaper)"
+        required: false
+        type: choice
+        options:
+          - SECURE
+          - COMMUNITY
+        default: SECURE
 
 concurrency:
   group: vrm-data-${{ inputs.data_version }}-${{ inputs.stage }}
@@ -92,6 +100,7 @@ jobs:
           VRM_GIT_REF: ${{ github.sha }}
           VRM_DEBUG_HOLD: ${{ inputs.debug_hold && '1' || '' }}
           VRM_SKIP_VOLUME: ${{ inputs.skip_volume && '1' || '0' }}
+          VRM_CLOUD_TYPE: ${{ inputs.cloud_type }}
         id: launch
         run: |
           DISTILL_FLAG="--include-distillation"

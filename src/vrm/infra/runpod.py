@@ -36,7 +36,7 @@ class PodSpec:
     container_disk_in_gb: int = 200
     env: dict[str, str] = field(default_factory=dict)
     region: str | None = None
-    cloud_type: str = "SECURE"
+    cloud_type: str = "SECURE"  # SECURE | COMMUNITY; COMMUNITY has wider capacity
     ports: tuple[str, ...] = ("22/tcp", "8000/http")
     vcpu_count: int = 2
 
@@ -181,6 +181,9 @@ def _make_spec(
     container_disk_in_gb: int = 200,
     attach_volume: bool = True,
 ) -> PodSpec:
+    # Allow override of cloud type (SECURE has tighter H200 capacity; COMMUNITY
+    # has more hosts and is ~30% cheaper).
+    cloud_type = os.environ.get("VRM_CLOUD_TYPE", "SECURE").upper()
     return PodSpec(
         name=name,
         image=image,
@@ -190,6 +193,7 @@ def _make_spec(
         env=env,
         region=os.environ.get("VRM_REGION") if attach_volume else None,
         container_disk_in_gb=container_disk_in_gb,
+        cloud_type=cloud_type,
     )
 
 
