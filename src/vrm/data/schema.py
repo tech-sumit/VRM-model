@@ -5,9 +5,10 @@ Spec reference: VRM-7B_model_spec.md §3.3.
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Role = Literal["system", "user", "assistant"]
 AnswerType = Literal["numeric", "multiple_choice", "latex_math", "span"]
@@ -40,6 +41,20 @@ class Record(BaseModel):
     )
     source: str = Field(description="Source dataset identifier, e.g. 'mavis', 'geoqa'")
     metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _coerce_metadata(cls, v: Any) -> Any:
+        # PyArrow cannot encode empty/heterogeneous dicts, so normalize writes
+        # metadata as a JSON string. Accept either form on read.
+        if isinstance(v, str):
+            if not v:
+                return {}
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v
 
     def assistant_text(self) -> str:
         for m in reversed(self.messages):
