@@ -21,7 +21,7 @@ from vrm.data.verifiers import REGISTRY
 from vrm.data.verifiers.format import extract_answer, has_valid_format
 
 
-def _generate_with_vllm(
+def _generate_with_backend(
     records: Sequence[Record],
     *,
     model_id: str,
@@ -71,7 +71,7 @@ def main(
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
     records = [Record.model_validate(r) for r in ds]
-    completions_per = _generate_with_vllm(records, model_id=model_id, n=n_per_prompt)
+    completions_per = _generate_with_backend(records, model_id=model_id, n=n_per_prompt)
 
     out_rows: list[dict] = []
     in_count = len(records)

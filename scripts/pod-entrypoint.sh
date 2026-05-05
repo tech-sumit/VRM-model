@@ -27,30 +27,28 @@ hold_pod_if_debug() {
 : "${VRM_TASK:?VRM_TASK env var is required (sft|grpo|rejection|eval|dataprep)}"
 : "${RUN_NAME:?RUN_NAME env var is required}"
 
-# vLLM V1 worker subprocess start method. Default `fork` inherits all parent
-# state (open R2 connections, asyncio loops, transformers caches) and crashes
-# silently on Qwen2.5-VL multimodal profile. `spawn` starts a clean
-# interpreter for the worker. Must be exported BEFORE any python invocation
-# that imports vllm (transitively or directly).
+# Default VL inference: Hugging Face Transformers (Qwen2.5-VL). Set
+# VRM_VL_BACKEND=vllm for the optional vLLM path (filter / stage3).
+export VRM_VL_BACKEND="${VRM_VL_BACKEND:-transformers}"
+# When vLLM is used anywhere, avoid forked workers inheriting R2/asyncio state.
 export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 
-# Filter-stage vLLM (Qwen2.5-VL + vLLM 0.8.x):
-# - TORCH_SDPA is rejected on V0 (ValueError: Invalid attention backend ... use_v1: False)
-#   AND on V1 for this model path (NotImplementedError: V1 is not supported with TORCH_SDPA).
-#   Do not default to SDPA — use vLLM's default CUDA attention (FlashAttention).
-# - V1 + worker spawn avoids fork-after-asyncio/R2 crashes seen on pass@K runs.
-# Override: set VLLM_USE_V1=0 on the pod to force the V0 engine if a host misbehaves on V1.
-_fixup_vllm_for_filter() {
+# vLLM-specific env (ignored when VRM_VL_BACKEND=transformers): see VRM-model
+# inference.py. Transformers is the default backend (standard HF Qwen2.5-VL stack).
+_setup_vl_inference_env() {
     local st="${VRM_STAGE:-all}"
     if [[ "$st" != "filter" && "$st" != "all" ]]; then
         return 0
     fi
+    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+    if [[ "${VRM_VL_BACKEND}" != "vllm" ]]; then
+        return 0
+    fi
     if [[ "${VLLM_ATTENTION_BACKEND:-}" == "TORCH_SDPA" ]]; then
-        log "WARN: clearing VLLM_ATTENTION_BACKEND=TORCH_SDPA (unsupported for Qwen2.5-VL on vLLM 0.8.x); using default attention"
+        log "WARN: clearing VLLM_ATTENTION_BACKEND=TORCH_SDPA (unsupported for Qwen2.5-VL on vLLM 0.8.x)"
         unset VLLM_ATTENTION_BACKEND
     fi
     export VLLM_USE_TRITON_FLASH_ATTN="${VLLM_USE_TRITON_FLASH_ATTN:-0}"
-    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
     if [[ "${VLLM_USE_V1:-}" == "0" ]]; then
         return 0
     fi
@@ -146,7 +144,7 @@ case "$VRM_TASK" in
         if [[ "$_STAGE" == "distill" || "$_STAGE" == "all" ]]; then
             _UPLOAD_FLAG="--upload"
         fi
-        _fixup_vllm_for_filter
+        _setup_vl_inference_env
         python -m vrm.data.build \
             "${_RECIPE_ARGS[@]}" \
             --data-version "${DATA_VERSION:?}" \

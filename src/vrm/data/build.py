@@ -5,8 +5,9 @@ recipe:
     1. For every source listed in `recipe.sources`, normalize the upstream HF
        dataset into parquet shards under `<work>/normalized/<source>/`,
        capped at `cap` records per source.
-    2. Compute pass@K difficulty per record (vLLM batch inference) and keep
-       records with `lo <= pass@K <= hi`.
+    2. Compute pass@K difficulty per record (VL inference via Transformers by
+       default; set ``VRM_VL_BACKEND=vllm`` for vLLM) and keep records with
+       `lo <= pass@K <= hi`.
     3. (If `recipe.distillation.enabled`) ask Claude + GPT-4o for solutions
        and pick the best verifier-passing completion per record.
     4. Upload the final parquet shards to the HF dataset repo.
@@ -109,7 +110,7 @@ def _normalize_one_source(
 
 
 def _difficulty_provider_factory(model_id: str, k: int):
-    """Returns a callable Record -> pass@K, lazy-loading vLLM only when called."""
+    """Returns callable Record -> pass@K (lazy VL inference via ``generate_responses``)."""
 
     cache: dict[str, object] = {}
 
@@ -187,7 +188,7 @@ def _run_filter(
     flat_images = norm_flat / "images"
     flat_images.mkdir(parents=True, exist_ok=True)
     for src_dir in sorted(p for p in norm_dir.iterdir() if p.is_dir()):
-        for shard in sorted(src_dir.glob("shard-*.parquet")):
+        for shard in sorted(src_dir.glob("*.parquet")):
             dst = norm_flat / f"{src_dir.name}-{shard.name}"
             if not dst.exists():
                 dst.write_bytes(shard.read_bytes())
@@ -381,7 +382,8 @@ def build_one_recipe(
     default=STAGE_ALL,
     show_default=True,
     help=(
-        "Which pipeline stage to run. 'normalize' (CPU), 'filter' (GPU vLLM), "
+        "Which pipeline stage to run. 'normalize' (CPU), 'filter' (GPU: Transformers "
+        "default, or vLLM if VRM_VL_BACKEND=vllm), "
         "'distill' (CPU + OpenRouter), or 'all' for the full pipeline on one pod."
     ),
 )

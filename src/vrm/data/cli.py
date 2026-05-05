@@ -55,7 +55,7 @@ def filter_(
     pass_k: int,
     base_model_id: str,
 ) -> None:
-    """Run pass@K difficulty filter (vLLM-backed) over normalized parquet shards."""
+    """Run pass@K difficulty filter (Transformers or vLLM per VRM_VL_BACKEND)."""
     from vrm.data.build import _difficulty_provider_factory
     from vrm.data.filter import filter_shards
 

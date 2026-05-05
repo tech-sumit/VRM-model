@@ -323,9 +323,8 @@ def launch_dataprep(
         # which would prematurely kill CPU pods at ~15h wall-time.
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
-        # vLLM: do not inject USE_V1 or ATTENTION_BACKEND here. scripts/pod-entrypoint.sh
-        # enables V1 + spawn for filter; TORCH_SDPA is not valid for Qwen2.5-VL on vLLM 0.8.x
-        # (fails on both V0 and V1), so the entrypoint uses default FlashAttention.
+        # VL inference defaults: scripts/pod-entrypoint.sh sets VRM_VL_BACKEND=transformers.
+        # For vLLM, same file applies V1 + spawn without TORCH_SDPA (incompatible).
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",
