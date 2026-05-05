@@ -216,9 +216,11 @@ def _generate_responses_transformers(
 
     out_rows: list[list[str]] = []
     temp = max(float(temperature), 1e-5)
-    use_parallel_k = n_per_prompt > 1 and os.environ.get(
-        "VRM_HF_SEQUENTIAL_SAMPLES", ""
-    ).lower() not in ("1", "true", "yes")
+    use_parallel_k = n_per_prompt > 1 and os.environ.get("VRM_HF_SEQUENTIAL_SAMPLES", "").lower() not in (
+        "1",
+        "true",
+        "yes",
+    )
 
     for rec in records:
         messages = _record_to_qwen_hf_messages(rec)
