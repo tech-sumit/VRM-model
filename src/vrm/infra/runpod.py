@@ -323,10 +323,9 @@ def launch_dataprep(
         # which would prematurely kill CPU pods at ~15h wall-time.
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
-        # vLLM V0/V1 + attention backend: do not set here. scripts/pod-entrypoint.sh
-        # applies filter-stage defaults (V1 + TORCH_SDPA + spawn) that match
-        # vLLM 0.8.x; forcing V0 while entrypoint used SDPA caused:
-        # ValueError: Invalid attention backend for cuda, with use_v1: False
+        # vLLM: do not inject USE_V1 or ATTENTION_BACKEND here. scripts/pod-entrypoint.sh
+        # enables V1 + spawn for filter; TORCH_SDPA is not valid for Qwen2.5-VL on vLLM 0.8.x
+        # (fails on both V0 and V1), so the entrypoint uses default FlashAttention.
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",

@@ -34,30 +34,27 @@ hold_pod_if_debug() {
 # that imports vllm (transitively or directly).
 export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 
-# Filter-stage vLLM: vLLM 0.8.x rejects TORCH_SDPA on the V0 engine (ValueError:
-# Invalid attention backend for cuda, with use_v1: False). Use V1 when defaulting
-# to SDPA. Also disable Triton flash + tokenizers races (RunPod SIGSEGV notes).
-# Override: set VLLM_USE_V1=0 + leave VLLM_ATTENTION_BACKEND unset for V0 FlashAttn.
+# Filter-stage vLLM (Qwen2.5-VL + vLLM 0.8.x):
+# - TORCH_SDPA is rejected on V0 (ValueError: Invalid attention backend ... use_v1: False)
+#   AND on V1 for this model path (NotImplementedError: V1 is not supported with TORCH_SDPA).
+#   Do not default to SDPA — use vLLM's default CUDA attention (FlashAttention).
+# - V1 + worker spawn avoids fork-after-asyncio/R2 crashes seen on pass@K runs.
+# Override: set VLLM_USE_V1=0 on the pod to force the V0 engine if a host misbehaves on V1.
 _fixup_vllm_for_filter() {
     local st="${VRM_STAGE:-all}"
     if [[ "$st" != "filter" && "$st" != "all" ]]; then
         return 0
     fi
+    if [[ "${VLLM_ATTENTION_BACKEND:-}" == "TORCH_SDPA" ]]; then
+        log "WARN: clearing VLLM_ATTENTION_BACKEND=TORCH_SDPA (unsupported for Qwen2.5-VL on vLLM 0.8.x); using default attention"
+        unset VLLM_ATTENTION_BACKEND
+    fi
     export VLLM_USE_TRITON_FLASH_ATTN="${VLLM_USE_TRITON_FLASH_ATTN:-0}"
     export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
-
-    if [[ -n "${VLLM_ATTENTION_BACKEND:-}" ]]; then
-        if [[ "${VLLM_ATTENTION_BACKEND}" == "TORCH_SDPA" && "${VLLM_USE_V1:-1}" == "0" ]]; then
-            log "WARN: TORCH_SDPA requires VLLM_USE_V1=1; overriding VLLM_USE_V1"
-            export VLLM_USE_V1=1
-        fi
-        return 0
-    fi
     if [[ "${VLLM_USE_V1:-}" == "0" ]]; then
         return 0
     fi
     export VLLM_USE_V1=1
-    export VLLM_ATTENTION_BACKEND=TORCH_SDPA
 }
 
 # Start sshd in the background for hotfix/debug access if RunPod injected a
