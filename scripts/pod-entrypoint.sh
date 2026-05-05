@@ -27,6 +27,13 @@ hold_pod_if_debug() {
 : "${VRM_TASK:?VRM_TASK env var is required (sft|grpo|rejection|eval|dataprep)}"
 : "${RUN_NAME:?RUN_NAME env var is required}"
 
+# vLLM V1 worker subprocess start method. Default `fork` inherits all parent
+# state (open R2 connections, asyncio loops, transformers caches) and crashes
+# silently on Qwen2.5-VL multimodal profile. `spawn` starts a clean
+# interpreter for the worker. Must be exported BEFORE any python invocation
+# that imports vllm (transitively or directly).
+export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
+
 # Start sshd in the background for hotfix/debug access if RunPod injected a
 # PUBLIC_KEY. Only starts when ssh is installed (all vrm-* images ship
 # openssh-server). Non-fatal if keygen or sshd is missing.
