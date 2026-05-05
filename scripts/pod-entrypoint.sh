@@ -34,18 +34,30 @@ hold_pod_if_debug() {
 # that imports vllm (transitively or directly).
 export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 
-# Reduce native crashes (SIGSEGV) on heterogeneous RunPod GPUs/drivers: vLLM's
-# FlashAttention / Triton paths can segfault during Qwen2.5-VL multimodal warm-up
-# while the default image processor path is also heavier. For dataprep/filter we
-# prioritize stability over throughput; override in pod env if you need max speed.
+# Filter-stage vLLM: vLLM 0.8.x rejects TORCH_SDPA on the V0 engine (ValueError:
+# Invalid attention backend for cuda, with use_v1: False). Use V1 when defaulting
+# to SDPA. Also disable Triton flash + tokenizers races (RunPod SIGSEGV notes).
+# Override: set VLLM_USE_V1=0 + leave VLLM_ATTENTION_BACKEND unset for V0 FlashAttn.
 _fixup_vllm_for_filter() {
     local st="${VRM_STAGE:-all}"
     if [[ "$st" != "filter" && "$st" != "all" ]]; then
         return 0
     fi
-    export VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-TORCH_SDPA}"
     export VLLM_USE_TRITON_FLASH_ATTN="${VLLM_USE_TRITON_FLASH_ATTN:-0}"
     export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+
+    if [[ -n "${VLLM_ATTENTION_BACKEND:-}" ]]; then
+        if [[ "${VLLM_ATTENTION_BACKEND}" == "TORCH_SDPA" && "${VLLM_USE_V1:-1}" == "0" ]]; then
+            log "WARN: TORCH_SDPA requires VLLM_USE_V1=1; overriding VLLM_USE_V1"
+            export VLLM_USE_V1=1
+        fi
+        return 0
+    fi
+    if [[ "${VLLM_USE_V1:-}" == "0" ]]; then
+        return 0
+    fi
+    export VLLM_USE_V1=1
+    export VLLM_ATTENTION_BACKEND=TORCH_SDPA
 }
 
 # Start sshd in the background for hotfix/debug access if RunPod injected a

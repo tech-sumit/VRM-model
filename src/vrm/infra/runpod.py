@@ -323,12 +323,10 @@ def launch_dataprep(
         # which would prematurely kill CPU pods at ~15h wall-time.
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
-        # vLLM engine: V0 vs V1 compat varies per RunPod host (different
-        # CUDA driver / NCCL / kernel quirks). Default to V0 which is
-        # in-process (no zmq/multiproc IPC) and survives more host
-        # configs. With limit_mm_per_prompt=1 + max_model_len=32768 +
-        # mm_processor_kwargs the multimodal profile completes cleanly.
-        "VLLM_USE_V1": "0",
+        # vLLM V0/V1 + attention backend: do not set here. scripts/pod-entrypoint.sh
+        # applies filter-stage defaults (V1 + TORCH_SDPA + spawn) that match
+        # vLLM 0.8.x; forcing V0 while entrypoint used SDPA caused:
+        # ValueError: Invalid attention backend for cuda, with use_v1: False
     }
     spec = _make_spec(
         name=f"vrm-{stage}-{data_version}",
@@ -371,7 +369,6 @@ def launch_debug(gpu_type: str | None, gpu_count: int, image_kind: str, name: st
         "VRM_GPU_TYPE": gpu_type or "CPU",
         "VRM_GPU_COUNT": str(gpu_count),
         "VRM_DEBUG_HOLD": "1",
-        "VLLM_USE_V1": "0",
     }
     spec = _make_spec(
         name=name,
