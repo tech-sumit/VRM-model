@@ -33,6 +33,17 @@ export VRM_VL_BACKEND="${VRM_VL_BACKEND:-transformers}"
 # When vLLM is used anywhere, avoid forked workers inheriting R2/asyncio state.
 export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 
+# Hugging Face cache: default to /workspace on RunPod so an attached volume can
+# persist hub downloads across cold starts (filter/dataprep repeatedly loads VL).
+if [[ -z "${HF_HOME:-}" ]] && [[ -d /workspace ]]; then
+    export HF_HOME=/workspace/hf-cache
+fi
+if [[ -n "${HF_HOME:-}" ]]; then
+    mkdir -p "$HF_HOME"
+fi
+# Less VRAM fragmentation on long multi-sample generations (override in pod env if needed).
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 # vLLM-specific env (ignored when VRM_VL_BACKEND=transformers): see VRM-model
 # inference.py. Transformers is the default backend (standard HF Qwen2.5-VL stack).
 _setup_vl_inference_env() {

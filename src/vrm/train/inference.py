@@ -121,13 +121,35 @@ def _get_hf_vl(model_id: str) -> tuple[Any, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("VRM_VL_BACKEND=transformers requires CUDA (no GPU visible).")
 
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    # H100/A100 matmul throughput (safe for inference; no GradScaler).
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+    # Prefer fast image processor when the hub config supports it (removes
+    # "Using a slow image processor" and speeds multimodal prefill).
+    try:
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            use_fast=True,
+        )
+    except TypeError:
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+    # attn_implementation: sdpa is widely supported; flash_attention_2 needs
+    # flash-attn wheel + compatible heads — optional override via env.
+    _attn = os.environ.get("VRM_HF_ATTN_IMPLEMENTATION", "sdpa").strip().lower()
+    if _attn in ("sdpa", "eager", "flash_attention_2"):
+        _attn_kw: dict[str, Any] = {"attn_implementation": _attn}
+    else:
+        _attn_kw = {"attn_implementation": "sdpa"}
+
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        **_attn_kw,
     )
     model.eval()
     _HF_VL_CACHE[model_id] = (model, processor)
@@ -158,6 +180,17 @@ def _get_llm(model_id: str) -> Any:
     return llm
 
 
+def _effective_max_new_tokens(requested: int) -> int:
+    """Optional cap for faster filter passes (set VRM_HF_MAX_NEW_TOKENS on the pod)."""
+    cap = os.environ.get("VRM_HF_MAX_NEW_TOKENS", "").strip()
+    if not cap:
+        return requested
+    try:
+        return min(requested, int(cap))
+    except ValueError:
+        return requested
+
+
 def _generate_responses_transformers(
     records: Sequence[Record],
     *,
@@ -183,6 +216,9 @@ def _generate_responses_transformers(
 
     out_rows: list[list[str]] = []
     temp = max(float(temperature), 1e-5)
+    use_parallel_k = n_per_prompt > 1 and os.environ.get(
+        "VRM_HF_SEQUENTIAL_SAMPLES", ""
+    ).lower() not in ("1", "true", "yes")
 
     for rec in records:
         messages = _record_to_qwen_hf_messages(rec)
@@ -201,19 +237,50 @@ def _generate_responses_transformers(
         )
         proc_inputs = proc_inputs.to(device)
         in_len = int(proc_inputs["input_ids"].shape[1])
+        eff_max = _effective_max_new_tokens(max_tokens)
 
         comps: list[str] = []
+        if use_parallel_k:
+            # One generate() samples K completions in parallel — far better GPU
+            # utilization than K sequential autoregressive passes.
+            with torch.inference_mode():
+                try:
+                    gen_ids = model.generate(
+                        **proc_inputs,
+                        max_new_tokens=eff_max,
+                        do_sample=True,
+                        temperature=temp,
+                        top_p=1.0,
+                        pad_token_id=pad_id,
+                        num_return_sequences=n_per_prompt,
+                    )
+                except RuntimeError as e:
+                    if "out of memory" not in str(e).lower():
+                        raise
+                    torch.cuda.empty_cache()
+                    use_parallel_k = False
+                    # Fall through to sequential below on OOM
+                else:
+                    for row in range(gen_ids.shape[0]):
+                        new_tokens = gen_ids[row, in_len:]
+                        text_out = processor.tokenizer.decode(
+                            new_tokens.tolist(),
+                            skip_special_tokens=True,
+                            clean_up_tokenization_spaces=False,
+                        )
+                        comps.append(text_out)
+                    out_rows.append(comps)
+                    continue
+
         for _ in range(n_per_prompt):
             seed = int(torch.randint(0, 2**31 - 1, (1,), device="cpu").item())
-            # Qwen2.5-VL + transformers 4.51 rejects `generator=` in generate()
-            # (strict model_kwargs validation). Use global CUDA/CPU RNG instead.
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
             with torch.inference_mode():
                 gen_ids = model.generate(
                     **proc_inputs,
-                    max_new_tokens=max_tokens,
+                    max_new_tokens=eff_max,
                     do_sample=True,
                     temperature=temp,
                     top_p=1.0,
