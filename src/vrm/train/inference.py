@@ -6,10 +6,20 @@ won't crash on import.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Any
 
 from vrm.data.schema import Record
+
+# vLLM V1 spawns a worker subprocess via multiprocessing. Default start method
+# is `fork`, which inherits all open boto3/asyncio/HTTP connections from the
+# parent process and produces silent crashes on Qwen2.5-VL (engine_core dies
+# during multimodal profiling with no stderr). `spawn` avoids it by starting
+# from a clean interpreter. Verified: probe LLM in isolation works on `fork`,
+# but a vrm.data.build run that has already opened R2 + downloaded 1M images
+# crashes consistently. Set BEFORE any vLLM import.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 # LLM is configured with limit_mm_per_prompt={"image": 1}; records with more
 # images are truncated to the first N below.
