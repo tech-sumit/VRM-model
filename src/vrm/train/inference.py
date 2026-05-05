@@ -205,8 +205,11 @@ def _generate_responses_transformers(
         comps: list[str] = []
         for _ in range(n_per_prompt):
             seed = int(torch.randint(0, 2**31 - 1, (1,), device="cpu").item())
-            gen = torch.Generator(device=device)
-            gen.manual_seed(seed)
+            # Qwen2.5-VL + transformers 4.51 rejects `generator=` in generate()
+            # (strict model_kwargs validation). Use global CUDA/CPU RNG instead.
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
             with torch.inference_mode():
                 gen_ids = model.generate(
                     **proc_inputs,
@@ -215,7 +218,6 @@ def _generate_responses_transformers(
                     temperature=temp,
                     top_p=1.0,
                     pad_token_id=pad_id,
-                    generator=gen,
                 )
             new_tokens = gen_ids[0, in_len:]
             text_out = processor.tokenizer.decode(
