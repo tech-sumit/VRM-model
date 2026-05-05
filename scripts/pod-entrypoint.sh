@@ -34,6 +34,20 @@ hold_pod_if_debug() {
 # that imports vllm (transitively or directly).
 export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 
+# Reduce native crashes (SIGSEGV) on heterogeneous RunPod GPUs/drivers: vLLM's
+# FlashAttention / Triton paths can segfault during Qwen2.5-VL multimodal warm-up
+# while the default image processor path is also heavier. For dataprep/filter we
+# prioritize stability over throughput; override in pod env if you need max speed.
+_fixup_vllm_for_filter() {
+    local st="${VRM_STAGE:-all}"
+    if [[ "$st" != "filter" && "$st" != "all" ]]; then
+        return 0
+    fi
+    export VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-TORCH_SDPA}"
+    export VLLM_USE_TRITON_FLASH_ATTN="${VLLM_USE_TRITON_FLASH_ATTN:-0}"
+    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+}
+
 # Start sshd in the background for hotfix/debug access if RunPod injected a
 # PUBLIC_KEY. Only starts when ssh is installed (all vrm-* images ship
 # openssh-server). Non-fatal if keygen or sshd is missing.
@@ -123,6 +137,7 @@ case "$VRM_TASK" in
         if [[ "$_STAGE" == "distill" || "$_STAGE" == "all" ]]; then
             _UPLOAD_FLAG="--upload"
         fi
+        _fixup_vllm_for_filter
         python -m vrm.data.build \
             "${_RECIPE_ARGS[@]}" \
             --data-version "${DATA_VERSION:?}" \

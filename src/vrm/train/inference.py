@@ -107,12 +107,18 @@ def _get_llm(model_id: str) -> Any:
     # majority of the corpus -- profile cleanly; records with more images
     # will be truncated by vLLM, which is acceptable for a difficulty-only
     # pass. mm_processor_kwargs caps per-image tokens to keep prefill sane.
+    # Pass use_fast=True so HF does not pick the slow image processor (warns in
+    # logs; some slow-processor + vLLM paths are crash-prone on RunPod).
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
         dtype="bfloat16",
         limit_mm_per_prompt={"image": 1},
-        mm_processor_kwargs={"min_pixels": 28 * 28, "max_pixels": 1280 * 28 * 28},
+        mm_processor_kwargs={
+            "min_pixels": 28 * 28,
+            "max_pixels": 1280 * 28 * 28,
+            "use_fast": True,
+        },
         enforce_eager=True,
         max_model_len=32768,
         gpu_memory_utilization=0.85,
