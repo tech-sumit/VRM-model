@@ -14,6 +14,7 @@ Non-GPU environments import this module without loading torch models until
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,17 @@ from vrm.data.schema import Record
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 MAX_IMAGES_PER_PROMPT = 1
+
+
+def _vl_log_every() -> int:
+    """stderr progress for VL generate; 0 disables per-record lines (start/end still ok)."""
+    raw = os.environ.get("VRM_VL_LOG_EVERY", "10").strip().lower()
+    if raw in ("0", "", "never", "off"):
+        return 0
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
 
 
 def _vl_backend() -> str:
@@ -203,6 +215,11 @@ def _generate_responses_transformers(
 
     model, processor = _get_hf_vl(model_id)
     device = next(model.parameters()).device
+    attn = os.environ.get("VRM_HF_ATTN_IMPLEMENTATION", "sdpa").strip() or "sdpa"
+    sys.stderr.write(
+        f"[vl] HF Qwen-VL loaded device={device} attn={attn!r} records_in_batch={len(records)}\n"
+    )
+    sys.stderr.flush()
     tok = processor.tokenizer
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
 
@@ -221,8 +238,16 @@ def _generate_responses_transformers(
         "true",
         "yes",
     )
+    vl_log = _vl_log_every()
+    nrec = len(records)
 
-    for rec in records:
+    for idx, rec in enumerate(records):
+        if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
+            sys.stderr.write(
+                f"[vl] transformers record {idx + 1}/{nrec} generate n_per_prompt={n_per_prompt} "
+                f"parallel_pass_k={use_parallel_k} max_new_tokens_cap={_effective_max_new_tokens(max_tokens)}\n"
+            )
+            sys.stderr.flush()
         messages = _record_to_qwen_hf_messages(rec)
         prompt_text = processor.apply_chat_template(
             messages,
@@ -272,6 +297,11 @@ def _generate_responses_transformers(
                         )
                         comps.append(text_out)
                     out_rows.append(comps)
+                    if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
+                        sys.stderr.write(
+                            f"[vl] transformers record {idx + 1}/{nrec} generate finished OK (parallel_pass_k)\n"
+                        )
+                        sys.stderr.flush()
                     continue
 
         for _ in range(n_per_prompt):
@@ -297,6 +327,14 @@ def _generate_responses_transformers(
             comps.append(text_out)
         out_rows.append(comps)
 
+        if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
+            sys.stderr.write(
+                f"[vl] transformers record {idx + 1}/{nrec} generate finished OK (sequential_k)\n"
+            )
+            sys.stderr.flush()
+
+    sys.stderr.write(f"[vl] transformers batch done records={nrec} output_rows={len(out_rows)}\n")
+    sys.stderr.flush()
     return out_rows
 
 
@@ -312,6 +350,9 @@ def _generate_responses_vllm(
 
     llm = _get_llm(model_id)
     sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
+    nrec = len(records)
+    sys.stderr.write(f"[vl] vLLM generate starting records={nrec} n_per_prompt={n_per_prompt}\n")
+    sys.stderr.flush()
     prompts = []
     for r in records:
         imgs = _load_images(r.images[:MAX_IMAGES_PER_PROMPT])
@@ -320,6 +361,8 @@ def _generate_responses_vllm(
             entry["multi_modal_data"] = {"image": imgs}
         prompts.append(entry)
     outputs = llm.generate(prompts, sp)
+    sys.stderr.write(f"[vl] vLLM generate done records={nrec} outputs={len(outputs)}\n")
+    sys.stderr.flush()
     return [[o.text for o in out.outputs] for out in outputs]
 
 

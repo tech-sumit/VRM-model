@@ -116,6 +116,10 @@ def _difficulty_provider_factory(model_id: str, k: int):
 
     def _provider(rec: Record) -> float:
         if "llm" not in cache:
+            click.echo(
+                f"[filter] wiring VL inference (lazy init): model_id={model_id!r} pass_k={k}",
+                err=True,
+            )
             from vrm.train.inference import generate_responses
 
             cache["fn"] = generate_responses
@@ -180,6 +184,10 @@ def _run_filter(
         click.echo(f"[build] downloaded normalized from R2: {report}")
 
     norm_flat = norm_dir.parent / "normalized_flat"
+    click.echo(
+        f"[build] filter flatten into {norm_flat} (symlink/copy shards + images from {norm_dir}) …",
+        err=True,
+    )
     norm_flat.mkdir(parents=True, exist_ok=True)
     # Symlink every source's images into a single flat dir so that record
     # paths of the form "images/<src>-<idx>-<i>.jpg" resolve when filter runs
@@ -206,6 +214,12 @@ def _run_filter(
                             os.link(img, link)
                         except OSError:
                             link.write_bytes(img.read_bytes())
+
+    n_flat_parquet = len(list(norm_flat.glob("*.parquet")))
+    click.echo(
+        f"[build] filter flatten done: {n_flat_parquet} parquet(s) in {norm_flat}",
+        err=True,
+    )
 
     provider = _difficulty_provider_factory(base_model_id, pass_k)
     prev_cwd = os.getcwd()

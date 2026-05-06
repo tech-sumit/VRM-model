@@ -10,15 +10,28 @@ generation step from the cheap accounting:
 from __future__ import annotations
 
 import contextlib
+import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 
+import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from vrm.data.schema import Record
 from vrm.data.verifiers import score
 from vrm.infra.r2 import R2Client
+
+
+def _filter_log_every() -> int:
+    raw = os.environ.get("VRM_FILTER_LOG_EVERY", "50").strip().lower()
+    if raw in ("0", "", "never", "off"):
+        return 0
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 50
 
 
 def compute_difficulty(responses: list[str], gold: dict) -> float:
@@ -62,6 +75,11 @@ def filter_shards(
         # aborted earlier run (e.g. started before normalized data was on disk)
         # -- otherwise the stage would skip forever on subsequent pods.
         if state.get("done") and int(state.get("records_in", 0)) > 0:
+            click.echo(
+                "[filter] R2 checkpoint says stage already completed (skipped): "
+                f"records_in={state.get('records_in')} records_out={state.get('records_out')}",
+                err=True,
+            )
             return {
                 "records_in": float(state.get("records_in", 0)),
                 "records_out": float(state.get("records_out", 0)),
@@ -70,14 +88,27 @@ def filter_shards(
             }
         shard_idx = max(shard_idx, int(state.get("shards_written", 0)))
 
+    log_every = _filter_log_every()
+    input_paths = sorted(in_dir.glob("*.parquet"))
+    band = f"[{lo:g}, {hi:g}]"
+    click.echo(
+        f"[filter] start: inputs={len(input_paths)} parquet(s), shard_size={shard_size}, "
+        f"starting_output_shard_idx={shard_idx}, pass@K_band={band}, "
+        f"log_every={log_every} (env VRM_FILTER_LOG_EVERY; 0=quiet until flush/done)",
+        err=True,
+    )
+
     buf: list[dict] = []
+    t0 = time.monotonic()
 
     def _flush() -> None:
         nonlocal buf, shard_idx
         if not buf:
             return
+        nrows = len(buf)
         shard_path = out_dir / f"shard-{shard_idx:05d}.parquet"
         pq.write_table(pa.Table.from_pylist(buf), shard_path)
+        r2_ok = False
         if r2 is not None and data_version is not None:
             with contextlib.suppress(Exception):
                 r2.put_file(
@@ -96,17 +127,42 @@ def filter_shards(
                         "kept_pct": (out_count / in_count if in_count else 0.0),
                     },
                 )
+                r2_ok = True
+        click.echo(
+            f"[filter] flushed shard-{shard_idx:05d}: +{nrows} kept rows "
+            f"(scanned_total={in_count}, kept_total={out_count}; R2_checkpoint={'ok' if r2_ok else 'n/a/local'})",
+            err=True,
+        )
         shard_idx += 1
         buf = []
 
     # _run_filter renames flattened inputs to "{source}-shard-*.parquet", so
     # match any .parquet in the input dir rather than pinning to "shard-*".
-    for shard_path in sorted(in_dir.glob("*.parquet")):
+    for shard_path in input_paths:
         table = pq.read_table(shard_path)
+        n_rows_shard = table.num_rows
+        click.echo(
+            f"[filter] input parquet {shard_path.name} ({n_rows_shard} rows); scanned_so_far={in_count}",
+            err=True,
+        )
         for row in table.to_pylist():
+            if in_count == 0:
+                click.echo(
+                    "[filter] first-record inference beginning (VL load happens on first call; may take minutes)",
+                    err=True,
+                )
             in_count += 1
             rec = Record.model_validate(row)
             p = difficulty_provider(rec)
+            if log_every > 0 and (in_count == 1 or in_count % log_every == 0):
+                elapsed = time.monotonic() - t0
+                rpm = (in_count / elapsed * 60.0) if elapsed > 0 else 0.0
+                k_pct = (100.0 * out_count / in_count) if in_count else 0.0
+                click.echo(
+                    f"[filter] progress scanned={in_count} kept={out_count} keep_rate_so_far={k_pct:.2f}% "
+                    f"out_shards_written={shard_idx} input={shard_path.name} rpm={rpm:.2f}",
+                    err=True,
+                )
             if not keep_in_band(p, lo, hi):
                 continue
             row["difficulty"] = p
@@ -114,6 +170,10 @@ def filter_shards(
             out_count += 1
             if len(buf) >= shard_size:
                 _flush()
+        click.echo(
+            f"[filter] finished parquet {shard_path.name} scanned_total={in_count} kept_total={out_count}",
+            err=True,
+        )
     _flush()
 
     # Only write the terminal "done" marker when we actually processed input.
@@ -133,6 +193,14 @@ def filter_shards(
                     "done": True,
                 },
             )
+
+    wall = time.monotonic() - t0
+    click.echo(
+        f"[filter] done: scanned={in_count} kept={out_count} "
+        f"kept_pct={(100.0 * out_count / in_count) if in_count else 0.0:.2f}% "
+        f"output_shards={shard_idx} wall_s={wall:.1f}",
+        err=True,
+    )
 
     return {
         "records_in": float(in_count),
