@@ -66,6 +66,15 @@ _setup_vl_inference_env() {
     export VLLM_USE_V1=1
 }
 
+# Dataprep filter stage: default shorter decodes than generate_responses' 8192
+# for much higher rows/hour (override with VRM_FILTER_MAX_NEW_TOKENS or CLI).
+_setup_dataprep_filter_perf() {
+    local st="${VRM_STAGE:-all}"
+    [[ "${VRM_TASK:-}" == "dataprep" ]] || return 0
+    [[ "$st" == "filter" || "$st" == "all" ]] || return 0
+    export VRM_FILTER_MAX_NEW_TOKENS="${VRM_FILTER_MAX_NEW_TOKENS:-2048}"
+}
+
 # Start sshd in the background for hotfix/debug access if RunPod injected a
 # PUBLIC_KEY. Only starts when ssh is installed (all vrm-* images ship
 # openssh-server). Non-fatal if keygen or sshd is missing.
@@ -160,6 +169,7 @@ case "$VRM_TASK" in
             _UPLOAD_FLAG="--upload"
         fi
         _setup_vl_inference_env
+        _setup_dataprep_filter_perf
         python -m vrm.data.build \
             "${_RECIPE_ARGS[@]}" \
             --data-version "${DATA_VERSION:?}" \

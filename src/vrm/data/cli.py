@@ -47,6 +47,12 @@ def normalize(source: str, out_dir: Path, shard_size: int, limit: int | None) ->
     default="Qwen/Qwen2.5-VL-7B-Instruct",
     show_default=True,
 )
+@click.option(
+    "--max-new-tokens",
+    type=int,
+    default=None,
+    help="Max decode tokens per sample (default: VRM_FILTER_MAX_NEW_TOKENS or 2048)",
+)
 def filter_(
     in_dir: Path,
     out_dir: Path,
@@ -54,12 +60,18 @@ def filter_(
     hi: float,
     pass_k: int,
     base_model_id: str,
+    max_new_tokens: int | None,
 ) -> None:
     """Run pass@K difficulty filter (Transformers or vLLM per VRM_VL_BACKEND)."""
-    from vrm.data.build import _difficulty_provider_factory
+    from vrm.data.build import _difficulty_provider_factory, resolve_filter_max_new_tokens
     from vrm.data.filter import filter_shards
 
-    provider = _difficulty_provider_factory(base_model_id, pass_k)
+    eff = resolve_filter_max_new_tokens(max_new_tokens)
+    provider = _difficulty_provider_factory(
+        base_model_id,
+        pass_k,
+        max_new_tokens=eff,
+    )
     result = filter_shards(in_dir, out_dir, difficulty_provider=provider, lo=lo, hi=hi)
     click.echo(f"filtered: {result}")
 
@@ -96,4 +108,5 @@ def build(
         pass_k=8,
         include_distillation=include_distillation,
         upload=upload,
+        filter_max_new_tokens=None,
     )

@@ -42,6 +42,24 @@ STAGE_DISTILL = "distill"
 VALID_STAGES = (STAGE_ALL, STAGE_NORMALIZE, STAGE_FILTER, STAGE_DISTILL)
 
 
+def resolve_filter_max_new_tokens(explicit: int | None = None) -> int:
+    """Effective max decode tokens per pass@K sample for the filter stage.
+
+    Lower values improve throughput; raise if verifier misses increase.
+    CLI ``--filter-max-new-tokens`` wins; else ``VRM_FILTER_MAX_NEW_TOKENS``
+    (default 2048). ``VRM_HF_MAX_NEW_TOKENS`` still caps inside ``generate_responses``.
+    """
+    if explicit is not None:
+        return max(32, explicit)
+    raw = os.environ.get("VRM_FILTER_MAX_NEW_TOKENS", "2048").strip()
+    if not raw:
+        return 2048
+    try:
+        return max(32, int(raw))
+    except ValueError:
+        return 2048
+
+
 def _normalize_one_source(
     source: str,
     cap: int,
@@ -109,7 +127,7 @@ def _normalize_one_source(
     return result
 
 
-def _difficulty_provider_factory(model_id: str, k: int):
+def _difficulty_provider_factory(model_id: str, k: int, *, max_new_tokens: int):
     """Returns callable Record -> pass@K (lazy VL inference via ``generate_responses``)."""
 
     cache: dict[str, object] = {}
@@ -117,14 +135,20 @@ def _difficulty_provider_factory(model_id: str, k: int):
     def _provider(rec: Record) -> float:
         if "fn" not in cache:
             click.echo(
-                f"[filter] wiring VL inference (lazy init): model_id={model_id!r} pass_k={k}",
+                f"[filter] wiring VL inference (lazy init): model_id={model_id!r} "
+                f"pass_k={k} max_new_tokens={max_new_tokens}",
                 err=True,
             )
             from vrm.train.inference import generate_responses
 
             cache["fn"] = generate_responses
         fn = cache["fn"]
-        comps = fn([rec], model_id=model_id, n_per_prompt=k)[0]  # type: ignore[operator]
+        comps = fn(
+            [rec],
+            model_id=model_id,
+            n_per_prompt=k,
+            max_tokens=max_new_tokens,
+        )[0]  # type: ignore[operator]
         from vrm.data.filter import compute_difficulty
 
         return compute_difficulty(
@@ -166,6 +190,7 @@ def _run_filter(
     data_version: str,
     base_model_id: str,
     pass_k: int,
+    filter_max_new_tokens: int,
     r2: R2Client | None,
 ) -> dict[str, float]:
     # Flatten normalized per-source shards into one directory so filter
@@ -221,7 +246,11 @@ def _run_filter(
         err=True,
     )
 
-    provider = _difficulty_provider_factory(base_model_id, pass_k)
+    provider = _difficulty_provider_factory(
+        base_model_id,
+        pass_k,
+        max_new_tokens=filter_max_new_tokens,
+    )
     prev_cwd = os.getcwd()
     os.chdir(norm_flat)
     try:
@@ -290,6 +319,7 @@ def build_one_recipe(
     data_version: str,
     base_model_id: str,
     pass_k: int,
+    filter_max_new_tokens: int,
     include_distillation: bool,
     upload: bool,
     stage: str = STAGE_ALL,
@@ -323,6 +353,7 @@ def build_one_recipe(
             data_version=data_version,
             base_model_id=base_model_id,
             pass_k=pass_k,
+            filter_max_new_tokens=filter_max_new_tokens,
             r2=r2,
         )
         summary["filtered_kept"] = int(filter_result["records_out"])
@@ -401,6 +432,16 @@ def build_one_recipe(
         "'distill' (CPU + OpenRouter), or 'all' for the full pipeline on one pod."
     ),
 )
+@click.option(
+    "--filter-max-new-tokens",
+    "filter_max_new_tokens",
+    type=int,
+    default=None,
+    help=(
+        "Max decode tokens per pass@K completion in filter (default: "
+        "VRM_FILTER_MAX_NEW_TOKENS or 2048). Lower is faster."
+    ),
+)
 def main(
     recipe_paths: tuple[Path, ...],
     data_version: str,
@@ -410,8 +451,12 @@ def main(
     include_distillation: bool,
     upload: bool,
     stage: str,
+    filter_max_new_tokens: int | None,
 ) -> None:
     """Build dataset shards from one or more recipes."""
+    resolved_filter_max = resolve_filter_max_new_tokens(filter_max_new_tokens)
+    if stage in (STAGE_ALL, STAGE_FILTER):
+        click.echo(f"[build] filter max_new_tokens={resolved_filter_max}", err=True)
     run_name = f"dataprep-{stage}-{data_version}"
     task_label = f"dataprep-{stage}"
     summary: dict[str, Any] = {}
@@ -429,6 +474,7 @@ def main(
                 data_version=data_version,
                 base_model_id=base_model_id,
                 pass_k=pass_k,
+                filter_max_new_tokens=resolved_filter_max,
                 include_distillation=include_distillation,
                 upload=upload,
                 stage=stage,

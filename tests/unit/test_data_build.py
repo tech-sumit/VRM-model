@@ -24,6 +24,7 @@ def test_build_main_help():
         "--include-distillation",
         "--upload",
         "--pass-k",
+        "--filter-max-new-tokens",
     ):
         assert flag in res.output
 
@@ -31,5 +32,9 @@ def test_build_main_help():
 def test_difficulty_provider_factory_returns_callable():
     from vrm.data.build import _difficulty_provider_factory
 
-    p = _difficulty_provider_factory("Qwen/Qwen2.5-VL-7B-Instruct", k=8)
+    p = _difficulty_provider_factory(
+        "Qwen/Qwen2.5-VL-7B-Instruct",
+        k=8,
+        max_new_tokens=2048,
+    )
     assert callable(p)

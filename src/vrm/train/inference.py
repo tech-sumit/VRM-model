@@ -137,6 +137,8 @@ def _get_hf_vl(model_id: str) -> tuple[Any, Any]:
     # H100/A100 matmul throughput (safe for inference; no GradScaler).
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
 
     # Prefer fast image processor when the hub config supports it (removes
     # "Using a slow image processor" and speeds multimodal prefill).
@@ -360,7 +362,8 @@ def _generate_responses_vllm(
     from vllm import SamplingParams
 
     llm = _get_llm(model_id)
-    sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=max_tokens)
+    eff = _effective_max_new_tokens(max_tokens)
+    sp = SamplingParams(n=n_per_prompt, temperature=temperature, top_p=1.0, max_tokens=eff)
     nrec = len(records)
     sys.stderr.write(f"[vl] vLLM generate starting records={nrec} n_per_prompt={n_per_prompt}\n")
     sys.stderr.flush()

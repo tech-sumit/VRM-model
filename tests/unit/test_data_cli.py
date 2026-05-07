@@ -21,6 +21,7 @@ def test_data_filter_help_shows_lo_hi_pass_k():
     assert "--lo" in result.output
     assert "--hi" in result.output
     assert "--pass-k" in result.output
+    assert "--max-new-tokens" in result.output
 
 
 def test_data_build_help_shows_recipe_and_distill_toggle():
