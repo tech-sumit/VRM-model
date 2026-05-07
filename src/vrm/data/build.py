@@ -115,7 +115,7 @@ def _difficulty_provider_factory(model_id: str, k: int):
     cache: dict[str, object] = {}
 
     def _provider(rec: Record) -> float:
-        if "llm" not in cache:
+        if "fn" not in cache:
             click.echo(
                 f"[filter] wiring VL inference (lazy init): model_id={model_id!r} pass_k={k}",
                 err=True,

@@ -165,6 +165,13 @@ def _get_hf_vl(model_id: str) -> tuple[Any, Any]:
     )
     model.eval()
     _HF_VL_CACHE[model_id] = (model, processor)
+    device = next(model.parameters()).device
+    attn = os.environ.get("VRM_HF_ATTN_IMPLEMENTATION", "sdpa").strip() or "sdpa"
+    sys.stderr.write(
+        f"[vl] HF Qwen-VL weights loaded (once per process) model_id={model_id!r} "
+        f"device={device} attn={attn!r}\n"
+    )
+    sys.stderr.flush()
     return model, processor
 
 
@@ -215,11 +222,6 @@ def _generate_responses_transformers(
 
     model, processor = _get_hf_vl(model_id)
     device = next(model.parameters()).device
-    attn = os.environ.get("VRM_HF_ATTN_IMPLEMENTATION", "sdpa").strip() or "sdpa"
-    sys.stderr.write(
-        f"[vl] HF Qwen-VL loaded device={device} attn={attn!r} records_in_batch={len(records)}\n"
-    )
-    sys.stderr.flush()
     tok = processor.tokenizer
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
 
