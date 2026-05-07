@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -29,13 +30,13 @@ MAX_IMAGES_PER_PROMPT = 1
 
 def _vl_log_every() -> int:
     """stderr progress for VL generate; 0 disables per-record lines (start/end still ok)."""
-    raw = os.environ.get("VRM_VL_LOG_EVERY", "10").strip().lower()
+    raw = os.environ.get("VRM_VL_LOG_EVERY", "5").strip().lower()
     if raw in ("0", "", "never", "off"):
         return 0
     try:
         return max(1, int(raw))
     except ValueError:
-        return 10
+        return 5
 
 
 def _vl_backend() -> str:
@@ -244,9 +245,10 @@ def _generate_responses_transformers(
     nrec = len(records)
 
     for idx, rec in enumerate(records):
+        t_rec0 = time.monotonic()
         if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
             sys.stderr.write(
-                f"[vl] transformers record {idx + 1}/{nrec} generate n_per_prompt={n_per_prompt} "
+                f"[vl] transformers record {idx + 1}/{nrec} start prefill n_per_prompt={n_per_prompt} "
                 f"parallel_pass_k={use_parallel_k} max_new_tokens_cap={_effective_max_new_tokens(max_tokens)}\n"
             )
             sys.stderr.flush()
@@ -299,13 +301,17 @@ def _generate_responses_transformers(
                         )
                         comps.append(text_out)
                     out_rows.append(comps)
+                    rec_s = time.monotonic() - t_rec0
+                    new_tok = int(gen_ids.shape[1] - in_len)
                     if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
                         sys.stderr.write(
-                            f"[vl] transformers record {idx + 1}/{nrec} generate finished OK (parallel_pass_k)\n"
+                            f"[vl] transformers record {idx + 1}/{nrec} done parallel_pass_k "
+                            f"record_wall_s={rec_s:.2f}s in_tok={in_len} new_tok~={new_tok}\n"
                         )
                         sys.stderr.flush()
                     continue
 
+        out_new_max = 0
         for _ in range(n_per_prompt):
             seed = int(torch.randint(0, 2**31 - 1, (1,), device="cpu").item())
             torch.manual_seed(seed)
@@ -321,6 +327,7 @@ def _generate_responses_transformers(
                     pad_token_id=pad_id,
                 )
             new_tokens = gen_ids[0, in_len:]
+            out_new_max = max(out_new_max, int(new_tokens.shape[0]))
             text_out = processor.tokenizer.decode(
                 new_tokens.tolist(),
                 skip_special_tokens=True,
@@ -329,9 +336,11 @@ def _generate_responses_transformers(
             comps.append(text_out)
         out_rows.append(comps)
 
+        rec_s = time.monotonic() - t_rec0
         if vl_log > 0 and (idx == 0 or (idx + 1) % vl_log == 0):
             sys.stderr.write(
-                f"[vl] transformers record {idx + 1}/{nrec} generate finished OK (sequential_k)\n"
+                f"[vl] transformers record {idx + 1}/{nrec} done sequential_k "
+                f"record_wall_s={rec_s:.2f}s in_tok={in_len} new_tok_max~={out_new_max}\n"
             )
             sys.stderr.flush()
 

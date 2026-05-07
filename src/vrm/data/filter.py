@@ -25,13 +25,13 @@ from vrm.infra.r2 import R2Client
 
 
 def _filter_log_every() -> int:
-    raw = os.environ.get("VRM_FILTER_LOG_EVERY", "50").strip().lower()
+    raw = os.environ.get("VRM_FILTER_LOG_EVERY", "20").strip().lower()
     if raw in ("0", "", "never", "off"):
         return 0
     try:
         return max(1, int(raw))
     except ValueError:
-        return 50
+        return 20
 
 
 def compute_difficulty(responses: list[str], gold: dict) -> float:
@@ -145,7 +145,8 @@ def filter_shards(
             f"[filter] input parquet {shard_path.name} ({n_rows_shard} rows); scanned_so_far={in_count}",
             err=True,
         )
-        for row in table.to_pylist():
+        shard_t0 = time.monotonic()
+        for row_i, row in enumerate(table.to_pylist(), start=1):
             if in_count == 0:
                 click.echo(
                     "[filter] first-record inference beginning (VL load happens on first call; may take minutes)",
@@ -158,9 +159,15 @@ def filter_shards(
                 elapsed = time.monotonic() - t0
                 rpm = (in_count / elapsed * 60.0) if elapsed > 0 else 0.0
                 k_pct = (100.0 * out_count / in_count) if in_count else 0.0
+                sec_per_scan = elapsed / in_count if in_count else 0.0
+                in_b = keep_in_band(p, lo, hi)
+                shard_elapsed = time.monotonic() - shard_t0
                 click.echo(
                     f"[filter] progress scanned={in_count} kept={out_count} keep_rate_so_far={k_pct:.2f}% "
-                    f"out_shards_written={shard_idx} input={shard_path.name} rpm={rpm:.2f}",
+                    f"out_shards_written={shard_idx} shard_row={row_i}/{n_rows_shard} "
+                    f"last_p={p:.4f} in_band={in_b} input_shard={shard_path.name} "
+                    f"wall_s={elapsed:.1f} s_per_scan={sec_per_scan:.2f} shard_wall_s={shard_elapsed:.1f} "
+                    f"rpm_scanned={rpm:.2f}",
                     err=True,
                 )
             if not keep_in_band(p, lo, hi):
@@ -170,8 +177,10 @@ def filter_shards(
             out_count += 1
             if len(buf) >= shard_size:
                 _flush()
+        shard_wall = time.monotonic() - shard_t0
         click.echo(
-            f"[filter] finished parquet {shard_path.name} scanned_total={in_count} kept_total={out_count}",
+            f"[filter] finished parquet {shard_path.name} scanned_total={in_count} kept_total={out_count} "
+            f"this_shard_wall_s={shard_wall:.1f}",
             err=True,
         )
     _flush()
