@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -6,6 +7,7 @@ import pytest
 
 from vrm.data.filter import compute_difficulty, filter_shards, keep_in_band
 from vrm.data.schema import Record
+from vrm.infra.r2 import R2Client
 
 
 def test_compute_difficulty_counts_correct():
@@ -43,17 +45,19 @@ class _FakeR2:
     def __init__(self) -> None:
         self._state: dict = {}
 
-    def read_state(self, _dv: str, _stage: str, _source: str) -> dict:
+    def read_state(self, _data_version: str, _stage: str, _source: str) -> dict[str, Any]:
         return dict(self._state)
 
-    def write_state(self, _dv: str, _stage: str, _source: str, state: dict) -> None:
+    def write_state(self, _data_version: str, _stage: str, _source: str, state: dict[str, Any]) -> None:
         self._state = dict(state)
 
     def put_file(self, *args, **kwargs) -> None:
         pass
 
 
-def test_filter_resume_skips_inference_after_drop_checkpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_filter_resume_skips_inference_after_drop_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("VRM_FILTER_CHECKPOINT_EVERY", "1")
     in_dir = tmp_path / "in"
     out_dir = tmp_path / "out"
@@ -67,11 +71,27 @@ def test_filter_resume_skips_inference_after_drop_checkpoints(tmp_path: Path, mo
         return 0.01  # out of band
 
     r2 = _FakeR2()
-    filter_shards(in_dir, out_dir, difficulty_provider=_prov, lo=0.1, hi=0.85, r2=r2, data_version="v1")
+    filter_shards(
+        in_dir,
+        out_dir,
+        difficulty_provider=_prov,
+        lo=0.1,
+        hi=0.85,
+        r2=cast(R2Client | None, r2),
+        data_version="v1",
+    )
     assert calls["n"] == 4
     assert int(r2._state.get("resume_scanned_in", 0)) == 4
 
     r2._state.pop("done", None)
     calls["n"] = 0
-    filter_shards(in_dir, out_dir, difficulty_provider=_prov, lo=0.1, hi=0.85, r2=r2, data_version="v1")
+    filter_shards(
+        in_dir,
+        out_dir,
+        difficulty_provider=_prov,
+        lo=0.1,
+        hi=0.85,
+        r2=cast(R2Client | None, r2),
+        data_version="v1",
+    )
     assert calls["n"] == 0
