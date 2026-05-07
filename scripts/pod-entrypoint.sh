@@ -98,6 +98,10 @@ if [[ -n "${VRM_GIT_REPO:-}" ]] && [[ -n "${VRM_GIT_REF:-}" ]]; then
     fi
 fi
 
+# Line-buffer Python when stdout is piped to `tee` — otherwise /tmp/vrm-task.log
+# and RunPod console stay empty for long stretches during filter/ training.
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+
 # Budget tripwire daemon (background)
 python -m vrm.infra.budget --task "$VRM_TASK" --max-usd "${VRM_MAX_USD:?}" &
 BUDGET_PID=$!
